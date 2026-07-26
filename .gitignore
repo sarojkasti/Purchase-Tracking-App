@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
+
+# user-uploaded item images
+/public/uploads
+
+# local sqlite db
+/prisma/dev.db
+
+# stray nested folder
+/Purchase Tracking App/

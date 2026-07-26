@@ -1,0 +1,396 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Reference / Master data ----------
+
+model Agent {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  vendors        Vendor[]
+  freightRatePolicies AgentFreightRatePolicy[]
+  forexRates     ForexRate[]
+}
+
+// Versioned freight/cost rate by item category & transport mode, owned by the Agent
+// (from Master sheet columns) - which version applies is chosen by the PO's order date.
+model AgentFreightRatePolicy {
+  id            String   @id @default(cuid())
+  agentId       String
+  agent         Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  effectiveFrom DateTime
+  itemCategory  String // Sunglasses | Frames | Clip On | Kids
+  transportMode String // Road | Airway
+  rate          Float
+  createdAt     DateTime @default(now())
+
+  @@unique([agentId, effectiveFrom, itemCategory, transportMode])
+}
+
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String
+  shortName String   @unique // e.g. GSP, DTG, JSG - used as PO prefix
+  address   String?
+  agentId   String?
+  agent     Agent?   @relation(fields: [agentId], references: [id])
+  remarks   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+  payments       Payment[]
+  paymentPolicies VendorPaymentPolicy[]
+}
+
+// Versioned payment terms: which policy applies is chosen by the PO's order date
+// vs each policy's effectiveFrom, taking the latest policy whose effectiveFrom <= order date
+// (or the earliest policy at all, if the order predates every recorded policy).
+model VendorPaymentPolicy {
+  id                   String    @id @default(cuid())
+  vendorId             String
+  vendor               Vendor    @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  effectiveFrom        DateTime // policy applies to PO order dates on/after this date
+  advancePercent       Float // e.g. 0.3 = 30%
+  advanceOn            String // "Order" | "Shipping" etc - when advance is triggered
+  orderConfirmAfterAdv Boolean   @default(true)
+  balancePercent       Float // e.g. 0.7
+  balanceFrom          String? // "Shipping" etc - when balance is triggered
+  balanceAfterDays     Int? // days after balanceFrom trigger
+  notes                String?
+  createdAt            DateTime  @default(now())
+
+  @@unique([vendorId, effectiveFrom])
+}
+
+// Agent-scoped RMB -> NPR conversion rate: agents settle payments at different
+// rates on the same day, so the rate is looked up by (agent, date) rather than
+// a single global rate.
+model ForexRate {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  date      DateTime
+  rate      Float // RMB -> NPR conversion rate
+  createdAt DateTime @default(now())
+
+  @@unique([agentId, date])
+}
+
+// AD <-> BS calendar mapping, mirrors "Date Master" sheet
+model DateMaster {
+  id          String   @id @default(cuid())
+  englishDate DateTime @unique
+  nepaliDate  String // e.g. "2081/2/10"
+  nepaliYear  Int
+  nepaliMonth String
+  weekLabel   String? // e.g. "Shrawan Second Week"
+}
+
+// ---------- Simple named-list masters ----------
+// Covers Brand, Item Type, Gender, Mfg Type, Production Status,
+// Front/Temple/Lens Material, Shipping Method, Shipping Status Stage —
+// each is just a managed list of named options, distinguished by `type`.
+// Agent is its own model (see above) since it owns freight rate policies.
+// Price ranges live per Brand+ItemType in MrpRange, not as a global list.
+enum MasterType {
+  BRAND
+  ITEM_TYPE
+  GENDER
+  MFG_TYPE
+  PRODUCTION_STATUS
+  FRONT_MATERIAL
+  TEMPLE_MATERIAL
+  LENS_MATERIAL
+  SHIPPING_METHOD
+  SHIPPING_STATUS_STAGE
+}
+
+model SimpleMaster {
+  id        String     @id @default(cuid())
+  type      MasterType
+  name      String
+  sortOrder Int        @default(0)
+  createdAt DateTime   @default(now())
+
+  @@unique([type, name])
+}
+
+// Color master: name + factory-style serial code (e.g. "Black" / "C1").
+// Items reference chosen colors by name in POItem.colors (String[]).
+model Color {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String // e.g. "C1", "C2"
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
+// MRP price ranges scoped to a Brand + Item Type combo (e.g. "Limitless Sunglasses"
+// has its own range list, separate from "Limitless Frames"). Labels only, same
+// free-text style as the global Price Range master.
+model MrpRange {
+  id       String @id @default(cuid())
+  brand    String
+  itemType String
+  label    String // e.g. "1901-2500"
+  sortOrder Int   @default(0)
+
+  @@unique([brand, itemType, label])
+}
+
+// Multiplier applied to landed cost to derive MRP, one value per Brand.
+model MrpMultiplier {
+  id        String   @id @default(cuid())
+  brand     String   @unique
+  multiplier Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Reusable product record keyed by Chinese SKU, so entering the same SKU on a
+// later PO auto-fills its known details instead of retyping everything.
+model Product {
+  id         String  @id @default(cuid())
+  chineseSku String  @unique
+  newmewSku  String?
+
+  specificName String?
+  itemType     String? // Sunglasses | Frames | Clip On | Kids | Lens
+  gender       String?
+  size         String? // e.g. "56-19-148"
+
+  front  String?
+  temple String?
+  lens   String?
+
+  mrp      Float?
+  imageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------- Purchase Orders ----------
+
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  IN_PRODUCTION
+  QC
+  SHIPPED
+  AT_CUSTOM
+  RECEIVED
+  CANCELLED
+}
+
+enum MfgType {
+  READY_GOODS
+  PRODUCTION
+}
+
+enum TransportMode {
+  ROAD
+  AIRWAY
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+}
+
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  poNumber    String   @unique // e.g. "DTG-PO7.2"
+  piNumber    String? // Chinese PI No
+
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id])
+
+  orderDateAD DateTime
+  orderDateBS String?
+  orderMonth  String? // Nepali month, denormalized for quick filtering
+
+  status        OrderStatus @default(DRAFT)
+  transportMode TransportMode @default(ROAD)
+
+  brand   String?
+  gender  String?
+
+  // Quantities (rolled up from items, kept for quick display but items are source of truth)
+  unitsOrdered  Int @default(0)
+  unitsShipped  Int @default(0)
+  unitsReceived Int @default(0)
+
+  // Financials in RMB / NPR
+  piAmountRMB Float @default(0)
+  piAmountNPR Float @default(0)
+
+  estAdvanceRMB    Float @default(0)
+  estAdvanceNPR    Float @default(0)
+  estAdvanceDate   DateTime?
+  paidAdvanceRMB   Float @default(0)
+  paidAdvanceNPR   Float @default(0)
+  advancePaymentStatus PaymentStatus @default(PENDING)
+
+  estBalanceRMB    Float @default(0)
+  estBalanceNPR    Float @default(0)
+  estBalanceDate   DateTime?
+  paidBalanceRMB   Float @default(0)
+  paidBalanceNPR   Float @default(0)
+  balancePaymentStatus PaymentStatus @default(PENDING)
+
+  estCustomAmountNPR    Float @default(0)
+  actualCustomAmountNPR Float @default(0)
+
+  // Extra landed costs in RMB, added on top of piAmountRMB for the PO's total amount
+  printingCostRMB     Float @default(0)
+  chinaFreightCostRMB Float @default(0)
+  inspectionCostRMB   Float @default(0)
+
+  // Lifecycle dates
+  estGoodCompletionDate    DateTime?
+  revisedGoodCompletionDate DateTime?
+  actualGoodCompletionDate DateTime?
+
+  estFactoryShipmentDate    DateTime?
+  actualFactoryShipmentDate DateTime?
+  shipmentShifted           Boolean @default(false)
+
+  estCustomArrivalDate  DateTime?
+  actualCustomDate      DateTime?
+  estCustomClearanceDate DateTime?
+
+  estArrivalDateAD   DateTime?
+  estArrivalDateBS   String?
+  estArrivalWeek     String?
+  actualArrivalDateAD DateTime?
+  actualArrivalWeek   String?
+
+  discrepancyDays Int?
+  remarks         String?
+  sourceLink      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     POItem[]
+  payments  Payment[]
+  shipments Shipment[]
+}
+
+model POItem {
+  id      String @id @default(cuid())
+  poId    String
+  po      PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  chineseSku String?
+  newmewSku  String?
+  orderType  String? // "New Order" etc
+  specificName String?
+  itemType   String? // Sunglasses | Frames | Clip On | Kids | Lens
+  mfgType    MfgType?
+  category   String? // Acetate TAC, Metal TAC, etc (material combo)
+  gender     String?
+  size       String? // e.g. "56-19-148"
+
+  front  String?
+  temple String?
+  lens   String?
+  colors String[] @default([])
+
+  imageUrl String?
+
+  mrp        Float?
+  priceRangeLabel String? // e.g. "1901-2500"
+
+  unitsOrdered  Int @default(0)
+  shippedQty    Int @default(0)
+  receivedQty   Int @default(0)
+
+  materialCost Float?
+  printingCost Float?
+  freightCost  Float?
+  amountRMB    Float?
+  convRate     Float?
+  amountNPR    Float?
+  estCustomNPR Float?
+
+  estArrivalDate DateTime?
+  goodsStatus    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum PaymentType {
+  ADVANCE
+  BALANCE
+  CUSTOM_DUTY
+  OTHER
+}
+
+model Payment {
+  id       String   @id @default(cuid())
+  poId     String
+  po       PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  vendorId String
+  vendor   Vendor   @relation(fields: [vendorId], references: [id])
+
+  paymentDate DateTime
+  paymentType PaymentType
+  amountRMB   Float
+  exchangeRate Float
+  amountNPR   Float
+
+  // Optional breakdown by item category, mirrors "Actual Payment" sheet
+  sunglassesNPR Float?
+  framesNPR     Float?
+  clipOnNPR     Float?
+  kidsNPR       Float?
+  lensNPR       Float?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+}
+
+enum ShippingStatus {
+  PENDING
+  SHIPPED
+  AT_CUSTOM
+  CLEARED
+  RECEIVED
+}
+
+model Shipment {
+  id       String   @id @default(cuid())
+  poId     String
+  po       PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  shippingDate      DateTime
+  transportMode     TransportMode
+  shippedQty        Int
+  receivedQty       Int?
+
+  actualCustomArrivalDate DateTime?
+  actualCustomDate        DateTime?
+  arrivalDate             DateTime?
+
+  status ShippingStatus @default(SHIPPED)
+  notes  String?
+
+  createdAt DateTime @default(now())
+}
