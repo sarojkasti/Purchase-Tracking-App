@@ -48,5 +48,8 @@ next-env.d.ts
 # local sqlite db
 /prisma/dev.db
 
+# database backups
+/backups
+
 # stray nested folder
 /Purchase Tracking App/

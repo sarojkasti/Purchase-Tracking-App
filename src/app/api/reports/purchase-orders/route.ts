@@ -3,11 +3,13 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const pos = await prisma.purchaseOrder.findMany({
-    include: { vendor: { include: { agent: true } } },
+    include: { vendor: { include: { agent: true } }, items: { select: { brand: true } } },
     orderBy: { orderDateAD: "desc" },
   });
 
-  const rows = pos.map((po) => ({
+  const rows = pos.map((po) => {
+    const brands = Array.from(new Set(po.items.map((i) => i.brand).filter(Boolean)));
+    return {
     poNumber: po.poNumber,
     piNumber: po.piNumber,
     vendor: po.vendor.name,
@@ -19,7 +21,7 @@ export async function GET() {
 
     status: po.status,
     transportMode: po.transportMode,
-    brand: po.brand,
+    brand: brands.join(", ") || null,
     gender: po.gender,
 
     unitsOrdered: po.unitsOrdered,
@@ -72,7 +74,8 @@ export async function GET() {
     discrepancyDays: po.discrepancyDays,
     remarks: po.remarks,
     sourceLink: po.sourceLink,
-  }));
+    };
+  });
 
   return NextResponse.json(rows);
 }

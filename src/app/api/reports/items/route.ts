@@ -57,7 +57,7 @@ export async function GET() {
       );
       const agentFreightNPR = freightPolicy ? freightPolicy.rate * item.unitsOrdered : 0;
 
-      const multiplier = po.brand ? multiplierByBrand.get(po.brand) ?? null : null;
+      const multiplier = item.brand ? multiplierByBrand.get(item.brand) ?? null : null;
       const estMrp =
         landedNPR !== null && multiplier !== null
           ? (landedNPR + agentFreightNPR) * multiplier
@@ -72,7 +72,6 @@ export async function GET() {
         orderDateBS: po.orderDateBS,
         status: po.status,
         transportMode: po.transportMode,
-        brand: po.brand,
 
         chineseSku: item.chineseSku,
         newmewSku: item.newmewSku,
@@ -80,6 +79,7 @@ export async function GET() {
         specificName: item.specificName,
         itemType: item.itemType,
         mfgType: item.mfgType,
+        brand: item.brand,
         category: item.category,
         gender: item.gender,
         size: item.size,

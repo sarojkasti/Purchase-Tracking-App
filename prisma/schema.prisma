@@ -168,6 +168,7 @@ model Product {
 
   specificName String?
   itemType     String? // Sunglasses | Frames | Clip On | Kids | Lens
+  brand        String? // Newmew | Limitless | Other, from Brand master
   gender       String?
   size         String? // e.g. "56-19-148"
 
@@ -226,7 +227,6 @@ model PurchaseOrder {
   status        OrderStatus @default(DRAFT)
   transportMode TransportMode @default(ROAD)
 
-  brand   String?
   gender  String?
 
   // Quantities (rolled up from items, kept for quick display but items are source of truth)
@@ -286,9 +286,31 @@ model PurchaseOrder {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items     POItem[]
-  payments  Payment[]
-  shipments Shipment[]
+  items       POItem[]
+  payments    Payment[]
+  shipments   Shipment[]
+  attachments POAttachment[]
+}
+
+enum POAttachmentType {
+  PI
+  CI
+  COSTING_SHEET
+  OTHER
+}
+
+model POAttachment {
+  id     String @id @default(cuid())
+  poId   String
+  po     PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+
+  type       POAttachmentType
+  fileName   String
+  url        String
+  mimeType   String
+  fileSize   Int
+
+  uploadedAt DateTime @default(now())
 }
 
 model POItem {
@@ -302,6 +324,7 @@ model POItem {
   specificName String?
   itemType   String? // Sunglasses | Frames | Clip On | Kids | Lens
   mfgType    MfgType?
+  brand      String? // Newmew | Limitless | Other, from Brand master
   category   String? // Acetate TAC, Metal TAC, etc (material combo)
   gender     String?
   size       String? // e.g. "56-19-148"

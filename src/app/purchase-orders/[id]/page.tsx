@@ -18,28 +18,32 @@ export default async function PODetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [po, itemTypes, frontMaterials, templeMaterials, lensMaterials, colors] = await Promise.all([
-    prisma.purchaseOrder.findUnique({
-      where: { id },
-      include: {
-        vendor: true,
-        items: { orderBy: { createdAt: "asc" } },
-        payments: { orderBy: { paymentDate: "asc" } },
-        shipments: { orderBy: { shippingDate: "asc" } },
-      },
-    }),
-    getMasterNames("ITEM_TYPE"),
-    getMasterNames("FRONT_MATERIAL"),
-    getMasterNames("TEMPLE_MATERIAL"),
-    getMasterNames("LENS_MATERIAL"),
-    prisma.color.findMany({ orderBy: { sortOrder: "asc" } }),
-  ]);
+  const [po, itemTypes, brands, frontMaterials, templeMaterials, lensMaterials, colors] =
+    await Promise.all([
+      prisma.purchaseOrder.findUnique({
+        where: { id },
+        include: {
+          vendor: true,
+          items: { orderBy: { createdAt: "asc" } },
+          payments: { orderBy: { paymentDate: "asc" } },
+          shipments: { orderBy: { shippingDate: "asc" } },
+          attachments: { orderBy: { uploadedAt: "desc" } },
+        },
+      }),
+      getMasterNames("ITEM_TYPE"),
+      getMasterNames("BRAND"),
+      getMasterNames("FRONT_MATERIAL"),
+      getMasterNames("TEMPLE_MATERIAL"),
+      getMasterNames("LENS_MATERIAL"),
+      prisma.color.findMany({ orderBy: { sortOrder: "asc" } }),
+    ]);
   if (!po) notFound();
 
   return (
     <PODetailClient
       po={JSON.parse(JSON.stringify(po))}
       itemTypes={itemTypes}
+      brands={brands}
       frontMaterials={frontMaterials}
       templeMaterials={templeMaterials}
       lensMaterials={lensMaterials}

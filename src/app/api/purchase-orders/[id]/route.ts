@@ -14,6 +14,7 @@ export async function GET(
       items: true,
       payments: { orderBy: { paymentDate: "asc" } },
       shipments: { orderBy: { shippingDate: "asc" } },
+      attachments: { orderBy: { uploadedAt: "desc" } },
     },
   });
   if (!po) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -39,7 +40,6 @@ export async function PUT(
       orderDateBS: orderDateAD ? adToBs(orderDateAD) : undefined,
       status: body.status,
       transportMode: body.transportMode,
-      brand: body.brand || null,
       gender: body.gender || null,
       unitsOrdered: body.unitsOrdered !== undefined ? parseInt(body.unitsOrdered) : undefined,
       unitsShipped: body.unitsShipped !== undefined ? parseInt(body.unitsShipped) : undefined,

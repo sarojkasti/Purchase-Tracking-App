@@ -2,7 +2,15 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import {
+  SkuAutocomplete,
+  ItemImageInput,
+  ColorMultiSelect,
+  deriveCategory,
+  deriveSize,
+  type Product as ProductLookup,
+  type Color,
+} from "@/components/ItemRowInputs";
 
 type Item = {
   id: string;
@@ -11,22 +19,21 @@ type Item = {
   specificName: string | null;
   itemType: string | null;
   mfgType: string | null;
+  brand: string | null;
   category: string | null;
   colors: string[];
   size: string | null;
+  front: string | null;
+  temple: string | null;
+  lens: string | null;
   unitsOrdered: number;
   shippedQty: number;
   receivedQty: number;
   amountRMB: number | null;
+  convRate: number | null;
   amountNPR: number | null;
   goodsStatus: string | null;
   imageUrl: string | null;
-};
-
-type Color = {
-  id: string;
-  name: string;
-  code: string;
 };
 
 type Payment = {
@@ -48,6 +55,16 @@ type Shipment = {
   arrivalDate: string | null;
   status: string;
   notes: string | null;
+};
+
+type Attachment = {
+  id: string;
+  type: "PI" | "CI" | "COSTING_SHEET" | "OTHER";
+  fileName: string;
+  url: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedAt: string;
 };
 
 type PO = {
@@ -92,6 +109,7 @@ type PO = {
   items: Item[];
   payments: Payment[];
   shipments: Shipment[];
+  attachments: Attachment[];
 };
 
 const statusOptions = [
@@ -118,6 +136,7 @@ function toInputDate(d: string | null) {
 export default function PODetailClient({
   po: initialPo,
   itemTypes,
+  brands,
   frontMaterials,
   templeMaterials,
   lensMaterials,
@@ -125,6 +144,7 @@ export default function PODetailClient({
 }: {
   po: PO;
   itemTypes: string[];
+  brands: string[];
   frontMaterials: string[];
   templeMaterials: string[];
   lensMaterials: string[];
@@ -132,7 +152,7 @@ export default function PODetailClient({
 }) {
   const router = useRouter();
   const [po, setPo] = useState(initialPo);
-  const [tab, setTab] = useState<"overview" | "items" | "payments" | "shipping">("overview");
+  const [tab, setTab] = useState<"overview" | "items" | "payments" | "shipping" | "attachments">("overview");
   const [saving, setSaving] = useState(false);
 
   async function refresh() {
@@ -193,7 +213,7 @@ export default function PODetailClient({
       </div>
 
       <div className="flex gap-1 border-b mb-4">
-        {(["overview", "items", "payments", "shipping"] as const).map((t) => (
+        {(["overview", "items", "payments", "shipping", "attachments"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -204,6 +224,7 @@ export default function PODetailClient({
             {t} {t === "items" && `(${po.items.length})`}
             {t === "payments" && `(${po.payments.length})`}
             {t === "shipping" && `(${po.shipments.length})`}
+            {t === "attachments" && `(${po.attachments.length})`}
           </button>
         ))}
       </div>
@@ -214,6 +235,7 @@ export default function PODetailClient({
           po={po}
           onRefresh={refresh}
           itemTypes={itemTypes}
+          brands={brands}
           frontMaterials={frontMaterials}
           templeMaterials={templeMaterials}
           lensMaterials={lensMaterials}
@@ -222,6 +244,7 @@ export default function PODetailClient({
       )}
       {tab === "payments" && <PaymentsTab po={po} onRefresh={refresh} />}
       {tab === "shipping" && <ShippingTab po={po} onRefresh={refresh} />}
+      {tab === "attachments" && <AttachmentsTab po={po} onRefresh={refresh} />}
 
       <style jsx global>{`
         .input {
@@ -273,6 +296,7 @@ function OverviewTab({
     chinaFreightCostRMB: String(po.chinaFreightCostRMB || ""),
     inspectionCostRMB: String(po.inspectionCostRMB || ""),
   });
+  const [costsSaving, setCostsSaving] = useState(false);
 
   const extraCostsRMB =
     (parseFloat(costs.printingCostRMB) || 0) +
@@ -282,12 +306,17 @@ function OverviewTab({
   const convRate = po.piAmountRMB ? po.piAmountNPR / po.piAmountRMB : 0;
   const totalPOAmountNPR = po.piAmountNPR + extraCostsRMB * convRate;
 
-  function saveCosts() {
-    onUpdate({
-      printingCostRMB: costs.printingCostRMB || 0,
-      chinaFreightCostRMB: costs.chinaFreightCostRMB || 0,
-      inspectionCostRMB: costs.inspectionCostRMB || 0,
-    });
+  async function saveCosts() {
+    setCostsSaving(true);
+    try {
+      await onUpdate({
+        printingCostRMB: costs.printingCostRMB || 0,
+        chinaFreightCostRMB: costs.chinaFreightCostRMB || 0,
+        inspectionCostRMB: costs.inspectionCostRMB || 0,
+      });
+    } finally {
+      setCostsSaving(false);
+    }
   }
 
   return (
@@ -314,7 +343,6 @@ function OverviewTab({
               className="input"
               value={costs.printingCostRMB}
               onChange={(e) => setCosts({ ...costs, printingCostRMB: e.target.value })}
-              onBlur={saveCosts}
             />
           </label>
           <label className="block">
@@ -325,7 +353,6 @@ function OverviewTab({
               className="input"
               value={costs.chinaFreightCostRMB}
               onChange={(e) => setCosts({ ...costs, chinaFreightCostRMB: e.target.value })}
-              onBlur={saveCosts}
             />
           </label>
           <label className="block">
@@ -336,7 +363,6 @@ function OverviewTab({
               className="input"
               value={costs.inspectionCostRMB}
               onChange={(e) => setCosts({ ...costs, inspectionCostRMB: e.target.value })}
-              onBlur={saveCosts}
             />
           </label>
           <div>
@@ -348,6 +374,16 @@ function OverviewTab({
               </span>
             </div>
           </div>
+        </div>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={saveCosts}
+            disabled={costsSaving}
+            className="rounded bg-gray-900 text-white text-sm px-4 py-1.5 hover:bg-gray-700 disabled:opacity-50"
+          >
+            {costsSaving ? "Saving..." : "Save"}
+          </button>
         </div>
       </div>
 
@@ -501,56 +537,74 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-type ProductLookup = {
+type EditableItemRow = {
   chineseSku: string;
-  newmewSku: string | null;
-  specificName: string | null;
-  itemType: string | null;
-  gender: string | null;
-  size: string | null;
-  front: string | null;
-  temple: string | null;
-  lens: string | null;
-  mrp: number | null;
-  imageUrl: string | null;
+  newmewSku: string;
+  specificName: string;
+  itemType: string;
+  brand: string;
+  mfgType: string;
+  front: string;
+  temple: string;
+  lens: string;
+  colors: string[];
+  sizeLens: string;
+  sizeBridge: string;
+  sizeTemple: string;
+  unitsOrdered: string;
+  rateRMB: string;
+  convRate: string;
+  imageUrl: string;
 };
 
-function deriveCategory(front: string, temple: string, lens: string) {
-  return [front, temple, lens].filter(Boolean).join("+");
+function itemToRow(item: Item): EditableItemRow {
+  const [sizeLens, sizeBridge, sizeTemple] = (item.size ?? "").split("-");
+  return {
+    chineseSku: item.chineseSku ?? "",
+    newmewSku: item.newmewSku ?? "",
+    specificName: item.specificName ?? "",
+    itemType: item.itemType ?? "Sunglasses",
+    brand: item.brand ?? "",
+    mfgType: item.mfgType ?? "READY_GOODS",
+    front: item.front ?? "",
+    temple: item.temple ?? "",
+    lens: item.lens ?? "",
+    colors: item.colors,
+    sizeLens: sizeLens || "",
+    sizeBridge: sizeBridge || "",
+    sizeTemple: sizeTemple || "",
+    unitsOrdered: String(item.unitsOrdered),
+    rateRMB: item.unitsOrdered ? String((item.amountRMB ?? 0) / item.unitsOrdered) : "",
+    convRate: item.convRate ? String(item.convRate) : "",
+    imageUrl: item.imageUrl ?? "",
+  };
 }
 
-function deriveSize(lens: string, bridge: string, temple: string) {
-  if (!lens && !bridge && !temple) return "";
-  return `${lens.padStart(2, "0")}-${bridge.padStart(2, "0")}-${temple.padStart(3, "0")}`;
-}
-
-function emptyItemForm(defaultConvRate: string) {
+function emptyNewItemRow(defaultConvRate: string): EditableItemRow {
   return {
     chineseSku: "",
     newmewSku: "",
     specificName: "",
     itemType: "Sunglasses",
+    brand: "",
     mfgType: "READY_GOODS",
     front: "",
     temple: "",
     lens: "",
-    colors: [] as string[],
+    colors: [],
     sizeLens: "",
     sizeBridge: "",
     sizeTemple: "",
     unitsOrdered: "",
-    shippedQty: "",
-    receivedQty: "",
     rateRMB: "",
     convRate: defaultConvRate,
-    goodsStatus: "Pending",
     imageUrl: "",
   };
 }
 
-function itemFormAmountRMB(form: { unitsOrdered: string; rateRMB: string }) {
-  const units = parseFloat(form.unitsOrdered) || 0;
-  const rate = parseFloat(form.rateRMB) || 0;
+function rowAmountRMB(row: { unitsOrdered: string; rateRMB: string }) {
+  const units = parseFloat(row.unitsOrdered) || 0;
+  const rate = parseFloat(row.rateRMB) || 0;
   return units * rate;
 }
 
@@ -558,6 +612,7 @@ function ItemsTab({
   po,
   onRefresh,
   itemTypes,
+  brands,
   frontMaterials,
   templeMaterials,
   lensMaterials,
@@ -566,14 +621,38 @@ function ItemsTab({
   po: PO;
   onRefresh: () => Promise<void>;
   itemTypes: string[];
+  brands: string[];
   frontMaterials: string[];
   templeMaterials: string[];
   lensMaterials: string[];
   colors: Color[];
 }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(emptyItemForm(""));
+  const [defaultConvRate, setDefaultConvRate] = useState("");
+  const [rows, setRows] = useState<Record<string, EditableItemRow>>(() =>
+    Object.fromEntries(po.items.map((item) => [item.id, itemToRow(item)]))
+  );
+  const [newRows, setNewRows] = useState<(EditableItemRow & { key: string })[]>([]);
+  const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [costs, setCosts] = useState({
+    printingCostRMB: String(po.printingCostRMB || ""),
+    chinaFreightCostRMB: String(po.chinaFreightCostRMB || ""),
+    inspectionCostRMB: String(po.inspectionCostRMB || ""),
+  });
+
+  useEffect(() => {
+    setRows(Object.fromEntries(po.items.map((item) => [item.id, itemToRow(item)])));
+    setNewRows([]);
+    setPendingDeletes(new Set());
+    setCosts({
+      printingCostRMB: String(po.printingCostRMB || ""),
+      chinaFreightCostRMB: String(po.chinaFreightCostRMB || ""),
+      inspectionCostRMB: String(po.inspectionCostRMB || ""),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [po.id, po.items, po.printingCostRMB, po.chinaFreightCostRMB, po.inspectionCostRMB]);
 
   useEffect(() => {
     const date = po.orderDateAD.slice(0, 10);
@@ -583,289 +662,655 @@ function ItemsTab({
     fetch(url)
       .then((res) => res.json())
       .then((data) => {
-        if (data?.rate) {
-          setForm((f) => (f.convRate ? f : { ...f, convRate: String(data.rate) }));
-        }
+        if (data?.rate) setDefaultConvRate(String(data.rate));
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleSkuSelect(product: ProductLookup) {
+  const visibleItems = po.items.filter((item) => !pendingDeletes.has(item.id));
+
+  const extraCostsRMB =
+    (parseFloat(costs.printingCostRMB) || 0) +
+    (parseFloat(costs.chinaFreightCostRMB) || 0) +
+    (parseFloat(costs.inspectionCostRMB) || 0);
+  const itemsAmountRMB =
+    visibleItems.reduce((s, item) => s + rowAmountRMB(rows[item.id] ?? itemToRow(item)), 0) +
+    newRows.reduce((s, r) => s + rowAmountRMB(r), 0);
+  const totalPOAmountRMB = itemsAmountRMB + extraCostsRMB;
+  const costsConvRate = po.piAmountRMB ? po.piAmountNPR / po.piAmountRMB : 0;
+  const itemsAmountNPR = costsConvRate ? itemsAmountRMB * costsConvRate : po.piAmountNPR;
+  const totalPOAmountNPR = itemsAmountNPR + extraCostsRMB * costsConvRate;
+
+  function updateExistingRow(itemId: string, patch: Partial<EditableItemRow>) {
+    setRows((r) => ({ ...r, [itemId]: { ...r[itemId], ...patch } }));
+  }
+
+  function updateNewRow(key: string, patch: Partial<EditableItemRow>) {
+    setNewRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  }
+
+  function applySkuSelect(row: EditableItemRow, product: ProductLookup): EditableItemRow {
     const [sizeLens, sizeBridge, sizeTemple] = (product.size ?? "").split("-");
     // mfgType is intentionally left untouched — it's always user-editable,
     // even when the rest of the row is auto-filled from the SKU master.
-    setForm((f) => ({
-      ...f,
+    return {
+      ...row,
       chineseSku: product.chineseSku,
-      newmewSku: product.newmewSku ?? "",
-      specificName: product.specificName ?? "",
-      itemType: product.itemType ?? f.itemType,
-      sizeLens: sizeLens || "",
-      sizeBridge: sizeBridge || "",
-      sizeTemple: sizeTemple || "",
-      front: product.front ?? "",
-      temple: product.temple ?? "",
-      lens: product.lens ?? "",
-      imageUrl: product.imageUrl ?? f.imageUrl,
-    }));
+      newmewSku: product.newmewSku ?? row.newmewSku,
+      specificName: product.specificName ?? row.specificName,
+      itemType: product.itemType ?? row.itemType,
+      brand: product.brand ?? row.brand,
+      sizeLens: sizeLens || row.sizeLens,
+      sizeBridge: sizeBridge || row.sizeBridge,
+      sizeTemple: sizeTemple || row.sizeTemple,
+      front: product.front ?? row.front,
+      temple: product.temple ?? row.temple,
+      lens: product.lens ?? row.lens,
+      imageUrl: product.imageUrl ?? row.imageUrl,
+    };
   }
 
-  async function handleImageUpload(file: File) {
+  async function handleExistingImageUpload(itemId: string, file: File) {
     const formData = new FormData();
     formData.append("file", file);
     const res = await fetch("/api/upload", { method: "POST", body: formData });
     if (!res.ok) return;
     const data = await res.json();
-    setForm((f) => ({ ...f, imageUrl: data.url }));
+    updateExistingRow(itemId, { imageUrl: data.url });
   }
 
-  async function handleAdd(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleNewRowImageUpload(key: string, file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/upload", { method: "POST", body: formData });
+    if (!res.ok) return;
+    const data = await res.json();
+    updateNewRow(key, { imageUrl: data.url });
+  }
+
+  function markForDelete(itemId: string) {
+    if (!confirm("Remove this item? It will be deleted when you click Save.")) return;
+    setPendingDeletes((s) => new Set(s).add(itemId));
+  }
+
+  function unmarkForDelete(itemId: string) {
+    setPendingDeletes((s) => {
+      const next = new Set(s);
+      next.delete(itemId);
+      return next;
+    });
+  }
+
+  function addNewRow() {
+    setNewRows((rows) => [
+      ...rows,
+      { ...emptyNewItemRow(defaultConvRate), key: `${Date.now()}-${Math.random()}` },
+    ]);
+  }
+
+  function removeNewRow(key: string) {
+    setNewRows((rows) => rows.filter((r) => r.key !== key));
+  }
+
+  async function handleSavePO() {
     setSaving(true);
+    setError(null);
     try {
-      const category = deriveCategory(form.front, form.temple, form.lens);
-      const size = deriveSize(form.sizeLens, form.sizeBridge, form.sizeTemple);
-      const amountRMB = itemFormAmountRMB(form);
-      const amountNPR = amountRMB && form.convRate ? amountRMB * parseFloat(form.convRate) : undefined;
-      const res = await fetch(`/api/purchase-orders/${po.id}/items`, {
+      const updates = Object.entries(rows)
+        .filter(([itemId]) => !pendingDeletes.has(itemId))
+        .map(([itemId, row]) => {
+          const category = deriveCategory(row.front, row.temple, row.lens);
+          const size = deriveSize(row.sizeLens, row.sizeBridge, row.sizeTemple);
+          const amountRMB = rowAmountRMB(row);
+          const amountNPR = amountRMB && row.convRate ? amountRMB * parseFloat(row.convRate) : undefined;
+          return { itemId, data: { ...row, category, size, amountRMB, amountNPR } };
+        });
+
+      const creates = newRows
+        .filter((r) => r.chineseSku || r.specificName || r.unitsOrdered)
+        .map((r) => {
+          const category = deriveCategory(r.front, r.temple, r.lens);
+          const size = deriveSize(r.sizeLens, r.sizeBridge, r.sizeTemple);
+          const amountRMB = rowAmountRMB(r);
+          const amountNPR = amountRMB && r.convRate ? amountRMB * parseFloat(r.convRate) : undefined;
+          return { ...r, category, size, amountRMB, amountNPR };
+        });
+
+      const res = await fetch(`/api/purchase-orders/${po.id}/items/batch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, category, size, amountRMB, amountNPR }),
+        body: JSON.stringify({
+          updates,
+          creates,
+          deletes: Array.from(pendingDeletes),
+          costs,
+        }),
       });
-      if (!res.ok) throw new Error("Failed to add item");
-      setForm(emptyItemForm(form.convRate));
-      setShowForm(false);
+      if (!res.ok) throw new Error("Failed to save changes");
+      setNewRows([]);
+      setPendingDeletes(new Set());
       await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDelete(itemId: string) {
-    if (!confirm("Delete this item?")) return;
-    await fetch(`/api/purchase-orders/${po.id}/items/${itemId}`, { method: "DELETE" });
-    await onRefresh();
-  }
-
   return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700"
-        >
-          {showForm ? "Cancel" : "+ Add Item"}
-        </button>
-      </div>
+    <div className="space-y-3">
+      <p className="text-xs text-gray-500">
+        Chinese SKU doubles as a product master — start typing to pick a previously used SKU and
+        its details auto-fill. Category is derived automatically from Front + Temple + Lens.
+        Edits, new rows, deletions, and additional costs are all staged locally — click{" "}
+        <strong>Save PO</strong> below to apply everything at once.
+      </p>
 
-      {showForm && (
-        <form onSubmit={handleAdd} className="bg-white border rounded p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-3">
-          <ItemField label="Chinese SKU" required>
-            <SkuAutocomplete
-              value={form.chineseSku}
-              onChange={(v) => setForm({ ...form, chineseSku: v })}
-              onSelect={handleSkuSelect}
-              required
-            />
-          </ItemField>
-          <ItemField label="Newmew SKU (optional)">
-            <input className="input" value={form.newmewSku} onChange={(e) => setForm({ ...form, newmewSku: e.target.value })} />
-          </ItemField>
-          <ItemField label="Specific Name">
-            <input className="input" value={form.specificName} onChange={(e) => setForm({ ...form, specificName: e.target.value })} />
-          </ItemField>
-          <ItemField label="Item Type">
-            <select className="input" value={form.itemType} onChange={(e) => setForm({ ...form, itemType: e.target.value })}>
-              {itemTypes.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </ItemField>
-          <ItemField label="Mfg Type">
-            <select className="input" value={form.mfgType} onChange={(e) => setForm({ ...form, mfgType: e.target.value })}>
-              <option value="READY_GOODS">Ready Goods</option>
-              <option value="PRODUCTION">Production</option>
-            </select>
-          </ItemField>
-          <ItemField label="Front">
-            <select className="input" value={form.front} onChange={(e) => setForm({ ...form, front: e.target.value })}>
-              <option value="">-</option>
-              {frontMaterials.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </ItemField>
-          <ItemField label="Temple">
-            <select className="input" value={form.temple} onChange={(e) => setForm({ ...form, temple: e.target.value })}>
-              <option value="">-</option>
-              {templeMaterials.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </ItemField>
-          <ItemField label="Lens">
-            <select className="input" value={form.lens} onChange={(e) => setForm({ ...form, lens: e.target.value })}>
-              <option value="">-</option>
-              {lensMaterials.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </ItemField>
-          <ItemField label="Category (auto)">
-            <input className="input bg-gray-50" value={deriveCategory(form.front, form.temple, form.lens)} disabled />
-          </ItemField>
-          <ItemField label="Colors">
-            <ColorMultiSelect
-              colors={colors}
-              selected={form.colors}
-              onChange={(selected) => setForm({ ...form, colors: selected })}
-            />
-          </ItemField>
-          <ItemField label="Size (Lens-Bridge-Temple)">
-            <div className="flex items-center gap-1">
-              <input
-                type="number"
-                className="input w-16 px-1 text-center"
-                placeholder="56"
-                maxLength={2}
-                value={form.sizeLens}
-                onChange={(e) => setForm({ ...form, sizeLens: e.target.value.slice(0, 2) })}
-              />
-              <span className="text-gray-400">-</span>
-              <input
-                type="number"
-                className="input w-16 px-1 text-center"
-                placeholder="19"
-                maxLength={2}
-                value={form.sizeBridge}
-                onChange={(e) => setForm({ ...form, sizeBridge: e.target.value.slice(0, 2) })}
-              />
-              <span className="text-gray-400">-</span>
-              <input
-                type="number"
-                className="input w-16 px-1 text-center"
-                placeholder="148"
-                maxLength={3}
-                value={form.sizeTemple}
-                onChange={(e) => setForm({ ...form, sizeTemple: e.target.value.slice(0, 3) })}
-              />
-            </div>
-          </ItemField>
-          <ItemField label="Units Ordered">
-            <input type="number" className="input" value={form.unitsOrdered} onChange={(e) => setForm({ ...form, unitsOrdered: e.target.value })} />
-          </ItemField>
-          <ItemField label="Shipped Qty">
-            <input type="number" className="input" value={form.shippedQty} onChange={(e) => setForm({ ...form, shippedQty: e.target.value })} />
-          </ItemField>
-          <ItemField label="Received Qty">
-            <input type="number" className="input" value={form.receivedQty} onChange={(e) => setForm({ ...form, receivedQty: e.target.value })} />
-          </ItemField>
-          <ItemField label="RMB Rate">
-            <input type="number" step="0.01" className="input" value={form.rateRMB} onChange={(e) => setForm({ ...form, rateRMB: e.target.value })} />
-          </ItemField>
-          <ItemField label="Amount RMB (auto)">
-            <input className="input bg-gray-50" value={itemFormAmountRMB(form) ? itemFormAmountRMB(form).toFixed(2) : ""} disabled />
-          </ItemField>
-          <ItemField label="Conv. Rate (forex master)">
-            <input className="input bg-gray-50" value={form.convRate} disabled />
-          </ItemField>
-          <ItemField label="Goods Status">
-            <select className="input" value={form.goodsStatus} onChange={(e) => setForm({ ...form, goodsStatus: e.target.value })}>
-              <option>Pending</option>
-              <option>In Production</option>
-              <option>Shipped</option>
-              <option>Received</option>
-            </select>
-          </ItemField>
-          <ItemField label="Image">
-            <ItemImageInput
-              imageUrl={form.imageUrl}
-              onUpload={handleImageUpload}
-              onClear={() => setForm({ ...form, imageUrl: "" })}
-            />
-          </ItemField>
-          <div className="col-span-full">
-            <button type="submit" disabled={saving} className="rounded bg-gray-900 text-white text-sm px-4 py-2 hover:bg-gray-700 disabled:opacity-50">
-              {saving ? "Adding..." : "Add Item"}
-            </button>
-          </div>
-        </form>
-      )}
-
-      <div className="bg-white rounded border overflow-x-auto">
-        <table className="min-w-full text-sm">
+      <div className="overflow-x-auto">
+        <table className="text-sm border rounded border-separate border-spacing-0">
           <thead className="bg-gray-100 text-left text-gray-600">
             <tr>
-              <th className="px-3 py-2">Image</th>
-              <th className="px-3 py-2">Chinese SKU</th>
-              <th className="px-3 py-2">Newmew SKU</th>
-              <th className="px-3 py-2">Name</th>
-              <th className="px-3 py-2">Type</th>
-              <th className="px-3 py-2">Mfg Type</th>
-              <th className="px-3 py-2">Category</th>
-              <th className="px-3 py-2">Colors</th>
-              <th className="px-3 py-2">Size</th>
-              <th className="px-3 py-2">Ord/Shp/Rcv</th>
-              <th className="px-3 py-2">Amount RMB</th>
-              <th className="px-3 py-2">Amount NPR</th>
-              <th className="px-3 py-2">Status</th>
-              <th className="px-3 py-2"></th>
+              <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU</th>
+              <th className="px-2 py-1.5 min-w-[9rem]">Newmew SKU</th>
+              <th className="px-2 py-1.5 min-w-[11rem]">Name</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Type</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Brand</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Mfg Type</th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Front</th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Temple</th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Lens</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
+              <th className="px-2 py-1.5 min-w-[10rem]">Colors</th>
+              <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T)</th>
+              <th className="px-2 py-1.5 min-w-[6rem]">Units</th>
+              <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Amount NPR</th>
+              <th className="px-2 py-1.5 min-w-[4rem]">Image</th>
+              <th className="px-2 py-1.5 w-10"></th>
             </tr>
           </thead>
           <tbody>
-            {po.items.map((item) => (
-              <tr key={item.id} className="border-t">
-                <td className="px-3 py-2">
-                  {item.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={item.imageUrl} alt="Item" className="w-10 h-10 object-cover rounded border" />
-                  ) : (
-                    "-"
-                  )}
-                </td>
-                <td className="px-3 py-2 font-mono">{item.chineseSku ?? "-"}</td>
-                <td className="px-3 py-2 font-mono">{item.newmewSku ?? "-"}</td>
-                <td className="px-3 py-2">{item.specificName ?? "-"}</td>
-                <td className="px-3 py-2">{item.itemType ?? "-"}</td>
-                <td className="px-3 py-2">{item.mfgType ?? "-"}</td>
-                <td className="px-3 py-2">{item.category ?? "-"}</td>
-                <td className="px-3 py-2">{item.colors.length > 0 ? item.colors.join(", ") : "-"}</td>
-                <td className="px-3 py-2">{item.size ?? "-"}</td>
-                <td className="px-3 py-2">
-                  {item.unitsOrdered} / {item.shippedQty} / {item.receivedQty}
-                </td>
-                <td className="px-3 py-2">
-                  {item.amountRMB ? `¥${item.amountRMB.toLocaleString()}` : "-"}
-                </td>
-                <td className="px-3 py-2">
-                  {item.amountNPR ? `NPR ${item.amountNPR.toLocaleString()}` : "-"}
-                </td>
-                <td className="px-3 py-2">{item.goodsStatus ?? "-"}</td>
-                <td className="px-3 py-2">
-                  <button onClick={() => handleDelete(item.id)} className="text-red-600 hover:underline text-xs">
-                    Delete
-                  </button>
-                </td>
-              </tr>
+            {po.items.map((item) => {
+              const row = rows[item.id] ?? itemToRow(item);
+              const isPendingDelete = pendingDeletes.has(item.id);
+              return (
+                <tr key={item.id} className={`border-t ${isPendingDelete ? "opacity-40" : ""}`}>
+                  <td className="px-1 py-1 align-top">
+                    <SkuAutocomplete
+                      value={row.chineseSku}
+                      onChange={(v) => updateExistingRow(item.id, { chineseSku: v })}
+                      onSelect={(product) => {
+                        const updated = applySkuSelect(row, product);
+                        setRows((r) => ({ ...r, [item.id]: updated }));
+                      }}
+                      required
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input
+                      className="input"
+                      value={row.newmewSku}
+                      onChange={(e) => updateExistingRow(item.id, { newmewSku: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input
+                      className="input"
+                      value={row.specificName}
+                      onChange={(e) => updateExistingRow(item.id, { specificName: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.itemType}
+                      onChange={(e) => updateExistingRow(item.id, { itemType: e.target.value })}
+                    >
+                      {itemTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.brand}
+                      onChange={(e) => updateExistingRow(item.id, { brand: e.target.value })}
+                    >
+                      <option value="">-</option>
+                      {brands.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.mfgType}
+                      onChange={(e) => updateExistingRow(item.id, { mfgType: e.target.value })}
+                    >
+                      <option value="READY_GOODS">Ready Goods</option>
+                      <option value="PRODUCTION">Production</option>
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.front}
+                      onChange={(e) => updateExistingRow(item.id, { front: e.target.value })}
+                    >
+                      <option value="">-</option>
+                      {frontMaterials.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.temple}
+                      onChange={(e) => updateExistingRow(item.id, { temple: e.target.value })}
+                    >
+                      <option value="">-</option>
+                      {templeMaterials.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.lens}
+                      onChange={(e) => updateExistingRow(item.id, { lens: e.target.value })}
+                    >
+                      <option value="">-</option>
+                      {lensMaterials.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input className="input bg-gray-50" value={deriveCategory(row.front, row.temple, row.lens)} disabled />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <ColorMultiSelect
+                      colors={colors}
+                      selected={row.colors}
+                      onChange={(selected) => updateExistingRow(item.id, { colors: selected })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        className="input size-box"
+                        placeholder="56"
+                        value={row.sizeLens}
+                        onChange={(e) => updateExistingRow(item.id, { sizeLens: e.target.value.slice(0, 2) })}
+                      />
+                      <span className="text-gray-400">-</span>
+                      <input
+                        type="number"
+                        className="input size-box"
+                        placeholder="19"
+                        value={row.sizeBridge}
+                        onChange={(e) => updateExistingRow(item.id, { sizeBridge: e.target.value.slice(0, 2) })}
+                      />
+                      <span className="text-gray-400">-</span>
+                      <input
+                        type="number"
+                        className="input size-box"
+                        placeholder="148"
+                        value={row.sizeTemple}
+                        onChange={(e) => updateExistingRow(item.id, { sizeTemple: e.target.value.slice(0, 3) })}
+                      />
+                    </div>
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input
+                      type="number"
+                      className="input"
+                      value={row.unitsOrdered}
+                      onChange={(e) => updateExistingRow(item.id, { unitsOrdered: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="input"
+                      value={row.rateRMB}
+                      onChange={(e) => updateExistingRow(item.id, { rateRMB: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input className="input bg-gray-50" value={rowAmountRMB(row) ? rowAmountRMB(row).toFixed(2) : ""} disabled />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <input
+                      className="input bg-gray-50"
+                      value={
+                        rowAmountRMB(row) && row.convRate
+                          ? (rowAmountRMB(row) * parseFloat(row.convRate)).toFixed(2)
+                          : ""
+                      }
+                      disabled
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <ItemImageInput
+                      imageUrl={row.imageUrl}
+                      onUpload={(file) => handleExistingImageUpload(item.id, file)}
+                      onClear={() => updateExistingRow(item.id, { imageUrl: "" })}
+                    />
+                  </td>
+                  <td className="px-1 py-1 text-center align-top">
+                    {isPendingDelete ? (
+                      <button
+                        type="button"
+                        onClick={() => unmarkForDelete(item.id)}
+                        className="text-gray-600 hover:underline text-xs"
+                      >
+                        Undo
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => markForDelete(item.id)}
+                        className="text-red-600 hover:underline text-xs"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+
+            {newRows.map((newRow) => (
+            <tr key={newRow.key} className="border-t bg-gray-50/50">
+              <td className="px-1 py-1 align-top">
+                <SkuAutocomplete
+                  value={newRow.chineseSku}
+                  onChange={(v) => updateNewRow(newRow.key, { chineseSku: v })}
+                  onSelect={(product) => updateNewRow(newRow.key, applySkuSelect(newRow, product))}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input
+                  className="input"
+                  value={newRow.newmewSku}
+                  onChange={(e) => updateNewRow(newRow.key, { newmewSku: e.target.value })}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input
+                  className="input"
+                  value={newRow.specificName}
+                  onChange={(e) => updateNewRow(newRow.key, { specificName: e.target.value })}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.itemType}
+                  onChange={(e) => updateNewRow(newRow.key, { itemType: e.target.value })}
+                >
+                  {itemTypes.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.brand}
+                  onChange={(e) => updateNewRow(newRow.key, { brand: e.target.value })}
+                >
+                  <option value="">-</option>
+                  {brands.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.mfgType}
+                  onChange={(e) => updateNewRow(newRow.key, { mfgType: e.target.value })}
+                >
+                  <option value="READY_GOODS">Ready Goods</option>
+                  <option value="PRODUCTION">Production</option>
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.front}
+                  onChange={(e) => updateNewRow(newRow.key, { front: e.target.value })}
+                >
+                  <option value="">-</option>
+                  {frontMaterials.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.temple}
+                  onChange={(e) => updateNewRow(newRow.key, { temple: e.target.value })}
+                >
+                  <option value="">-</option>
+                  {templeMaterials.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.lens}
+                  onChange={(e) => updateNewRow(newRow.key, { lens: e.target.value })}
+                >
+                  <option value="">-</option>
+                  {lensMaterials.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input className="input bg-gray-50" value={deriveCategory(newRow.front, newRow.temple, newRow.lens)} disabled />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <ColorMultiSelect
+                  colors={colors}
+                  selected={newRow.colors}
+                  onChange={(selected) => updateNewRow(newRow.key, { colors: selected })}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    className="input size-box"
+                    placeholder="56"
+                    value={newRow.sizeLens}
+                    onChange={(e) => updateNewRow(newRow.key, { sizeLens: e.target.value.slice(0, 2) })}
+                  />
+                  <span className="text-gray-400">-</span>
+                  <input
+                    type="number"
+                    className="input size-box"
+                    placeholder="19"
+                    value={newRow.sizeBridge}
+                    onChange={(e) => updateNewRow(newRow.key, { sizeBridge: e.target.value.slice(0, 2) })}
+                  />
+                  <span className="text-gray-400">-</span>
+                  <input
+                    type="number"
+                    className="input size-box"
+                    placeholder="148"
+                    value={newRow.sizeTemple}
+                    onChange={(e) => updateNewRow(newRow.key, { sizeTemple: e.target.value.slice(0, 3) })}
+                  />
+                </div>
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input
+                  type="number"
+                  className="input"
+                  value={newRow.unitsOrdered}
+                  onChange={(e) => updateNewRow(newRow.key, { unitsOrdered: e.target.value })}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input
+                  type="number"
+                  step="0.01"
+                  className="input"
+                  value={newRow.rateRMB}
+                  onChange={(e) => updateNewRow(newRow.key, { rateRMB: e.target.value })}
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input className="input bg-gray-50" value={rowAmountRMB(newRow) ? rowAmountRMB(newRow).toFixed(2) : ""} disabled />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <input
+                  className="input bg-gray-50"
+                  value={
+                    rowAmountRMB(newRow) && newRow.convRate
+                      ? (rowAmountRMB(newRow) * parseFloat(newRow.convRate)).toFixed(2)
+                      : ""
+                  }
+                  disabled
+                />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <ItemImageInput
+                  imageUrl={newRow.imageUrl}
+                  onUpload={(file) => handleNewRowImageUpload(newRow.key, file)}
+                  onClear={() => updateNewRow(newRow.key, { imageUrl: "" })}
+                />
+              </td>
+              <td className="px-1 py-1 text-center align-top">
+                <button
+                  type="button"
+                  onClick={() => removeNewRow(newRow.key)}
+                  className="text-red-600 hover:underline text-xs"
+                >
+                  ✕
+                </button>
+              </td>
+            </tr>
             ))}
-            {po.items.length === 0 && (
-              <tr>
-                <td colSpan={14} className="px-3 py-6 text-center text-gray-500">
-                  No items added yet.
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
+      <button
+        type="button"
+        onClick={addNewRow}
+        className="text-sm text-blue-600 hover:underline"
+      >
+        + Add Item Row
+      </button>
+
+      <div className="bg-white border rounded p-4">
+        <h3 className="text-sm font-medium mb-3">Additional Costs (RMB)</h3>
+        <div className="grid grid-cols-4 gap-4 items-end">
+          <label className="block">
+            <span className="block text-xs text-gray-500 mb-1">Printing Cost</span>
+            <input
+              type="number"
+              step="0.01"
+              className="input"
+              value={costs.printingCostRMB}
+              onChange={(e) => setCosts({ ...costs, printingCostRMB: e.target.value })}
+            />
+          </label>
+          <label className="block">
+            <span className="block text-xs text-gray-500 mb-1">China Freight Cost</span>
+            <input
+              type="number"
+              step="0.01"
+              className="input"
+              value={costs.chinaFreightCostRMB}
+              onChange={(e) => setCosts({ ...costs, chinaFreightCostRMB: e.target.value })}
+            />
+          </label>
+          <label className="block">
+            <span className="block text-xs text-gray-500 mb-1">Inspection Cost</span>
+            <input
+              type="number"
+              step="0.01"
+              className="input"
+              value={costs.inspectionCostRMB}
+              onChange={(e) => setCosts({ ...costs, inspectionCostRMB: e.target.value })}
+            />
+          </label>
+          <div>
+            <span className="block text-xs text-gray-500 mb-1">Total PO Amount</span>
+            <div className="text-sm font-semibold">
+              ¥{totalPOAmountRMB.toLocaleString()}
+              <span className="block text-xs text-gray-400 font-normal">
+                NPR {totalPOAmountNPR.toLocaleString()}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {error && <div className="text-red-600 text-sm">{error}</div>}
+
+      <div>
+        <button
+          type="button"
+          onClick={handleSavePO}
+          disabled={saving}
+          className="rounded bg-gray-900 text-white text-sm px-4 py-2 hover:bg-gray-700 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save PO"}
+        </button>
+      </div>
+
+      <style jsx global>{`
+        .size-box {
+          width: 3.25rem;
+          padding-left: 0.25rem;
+          padding-right: 0.25rem;
+          text-align: center;
+        }
+        .size-box::-webkit-outer-spin-button,
+        .size-box::-webkit-inner-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        .size-box {
+          -moz-appearance: textfield;
+        }
+      `}</style>
     </div>
   );
 }
@@ -1099,248 +1544,130 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
   );
 }
 
-function ItemField({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="block text-xs text-gray-500 mb-1">
-        {label}
-        {required && <span className="text-red-500">*</span>}
-      </span>
-      {children}
-    </label>
-  );
+const attachmentTypeLabels: Record<Attachment["type"], string> = {
+  PI: "PI",
+  CI: "CI",
+  COSTING_SHEET: "Costing Sheet",
+  OTHER: "Other",
+};
+
+function fmtFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function SkuAutocomplete({
-  value,
-  onChange,
-  onSelect,
-  required,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  onSelect: (product: ProductLookup) => void;
-  required?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [results, setResults] = useState<ProductLookup[]>([]);
-  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0 });
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const q = value.trim();
-    if (!q) {
-      setResults([]);
-      return;
-    }
-    let cancelled = false;
-    fetch(`/api/products?q=${encodeURIComponent(q)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (!cancelled) setResults(data);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [value]);
-
-  function updatePosition() {
-    const rect = inputRef.current?.getBoundingClientRect();
-    if (rect) {
-      setCoords({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 220) });
-    }
-  }
-
-  return (
-    <div className="relative">
-      <input
-        ref={inputRef}
-        className="input"
-        placeholder="Chinese SKU"
-        value={value}
-        required={required}
-        onChange={(e) => {
-          onChange(e.target.value);
-          updatePosition();
-          setOpen(true);
-        }}
-        onFocus={() => {
-          updatePosition();
-          setOpen(true);
-        }}
-      />
-      {open &&
-        results.length > 0 &&
-        createPortal(
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <div
-              className="fixed z-50 max-h-56 overflow-y-auto bg-white border rounded shadow-lg py-1"
-              style={{ top: coords.top, left: coords.left, width: coords.width }}
-            >
-              {results.map((p) => (
-                <button
-                  key={p.chineseSku}
-                  type="button"
-                  onClick={() => {
-                    onSelect(p);
-                    setOpen(false);
-                  }}
-                  className="w-full text-left flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50"
-                >
-                  {p.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={p.imageUrl} alt="" className="w-6 h-6 object-cover rounded border shrink-0" />
-                  ) : (
-                    <span className="w-6 h-6 shrink-0" />
-                  )}
-                  <span className="font-mono">{p.chineseSku}</span>
-                  {p.specificName && <span className="text-gray-400 truncate">{p.specificName}</span>}
-                </button>
-              ))}
-            </div>
-          </>,
-          document.body
-        )}
-    </div>
-  );
-}
-
-function ItemImageInput({
-  imageUrl,
-  onUpload,
-  onClear,
-}: {
-  imageUrl: string;
-  onUpload: (file: File) => void;
-  onClear: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
+function AttachmentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
+  const [type, setType] = useState<Attachment["type"]>("PI");
   const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  async function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setError(null);
     try {
-      await onUpload(file);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("type", type);
+      const res = await fetch(`/api/purchase-orders/${po.id}/attachments`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Upload failed");
+      }
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = "";
     }
   }
 
+  async function handleDelete(attachmentId: string) {
+    if (!confirm("Delete this attachment?")) return;
+    await fetch(`/api/purchase-orders/${po.id}/attachments/${attachmentId}`, { method: "DELETE" });
+    await onRefresh();
+  }
+
   return (
-    <div className="flex items-center gap-1">
-      {imageUrl ? (
-        <div className="relative">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={imageUrl} alt="Item" className="w-10 h-10 object-cover rounded border" />
-          <button
-            type="button"
-            onClick={onClear}
-            className="absolute -top-1.5 -right-1.5 bg-white border rounded-full w-4 h-4 text-[10px] leading-none text-red-600 hover:bg-red-50"
-            title="Remove image"
+    <div className="space-y-4">
+      <div className="bg-white border rounded p-4 flex items-end gap-3">
+        <label className="block">
+          <span className="block text-xs text-gray-500 mb-1">Attachment Type</span>
+          <select
+            className="input"
+            value={type}
+            onChange={(e) => setType(e.target.value as Attachment["type"])}
           >
-            ✕
-          </button>
-        </div>
-      ) : (
+            <option value="PI">PI</option>
+            <option value="CI">CI</option>
+            <option value="COSTING_SHEET">Costing Sheet</option>
+            <option value="OTHER">Other</option>
+          </select>
+        </label>
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="w-10 h-10 flex items-center justify-center border border-dashed rounded text-gray-400 text-xs hover:bg-gray-50 disabled:opacity-50"
-          title="Upload image"
+          className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700 disabled:opacity-50"
         >
-          {uploading ? "…" : "+"}
+          {uploading ? "Uploading..." : "+ Add Attachment"}
         </button>
-      )}
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleChange}
-      />
-    </div>
-  );
-}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*,application/pdf,.xls,.xlsx"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+        {error && <span className="text-red-600 text-sm">{error}</span>}
+      </div>
 
-function ColorMultiSelect({
-  colors,
-  selected,
-  onChange,
-}: {
-  colors: Color[];
-  selected: string[];
-  onChange: (selected: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState({ top: 0, left: 0, width: 0 });
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  function toggle(name: string) {
-    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
-  }
-
-  function handleOpen() {
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (rect) {
-      setCoords({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 192) });
-    }
-    setOpen((o) => !o);
-  }
-
-  return (
-    <div className="relative">
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={handleOpen}
-        className="input text-left bg-white truncate"
-      >
-        {selected.length > 0 ? selected.join(", ") : <span className="text-gray-400">Select colors</span>}
-      </button>
-      {open &&
-        createPortal(
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-            <div
-              className="fixed z-50 max-h-56 overflow-y-auto bg-white border rounded shadow-lg py-1"
-              style={{ top: coords.top, left: coords.left, width: coords.width }}
-            >
-              {colors.length === 0 && (
-                <div className="px-3 py-2 text-xs text-gray-400">
-                  No colors defined. Add some under Masters → Colors.
-                </div>
-              )}
-              {colors.map((c) => (
-                <label
-                  key={c.id}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(c.name)}
-                    onChange={() => toggle(c.name)}
-                  />
-                  <span className="text-gray-400 font-mono text-xs">{c.code}</span>
-                  <span>{c.name}</span>
-                </label>
-              ))}
-            </div>
-          </>,
-          document.body
-        )}
+      <div className="bg-white rounded border overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-100 text-left text-gray-600">
+            <tr>
+              <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">File Name</th>
+              <th className="px-3 py-2">Size</th>
+              <th className="px-3 py-2">Uploaded</th>
+              <th className="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {po.attachments.map((a) => (
+              <tr key={a.id} className="border-t">
+                <td className="px-3 py-2">{attachmentTypeLabels[a.type]}</td>
+                <td className="px-3 py-2">
+                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    {a.fileName}
+                  </a>
+                </td>
+                <td className="px-3 py-2">{fmtFileSize(a.fileSize)}</td>
+                <td className="px-3 py-2">{fmtDate(a.uploadedAt)}</td>
+                <td className="px-3 py-2">
+                  <button onClick={() => handleDelete(a.id)} className="text-red-600 hover:underline text-xs">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {po.attachments.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
+                  No attachments uploaded yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

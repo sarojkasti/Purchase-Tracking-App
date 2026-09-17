@@ -5,6 +5,7 @@ type ProductFields = {
   newmewSku?: string | null;
   specificName?: string | null;
   itemType?: string | null;
+  brand?: string | null;
   gender?: string | null;
   size?: string | null;
   front?: string | null;
@@ -23,6 +24,7 @@ export async function upsertProductFromItem(fields: ProductFields) {
     newmewSku: fields.newmewSku ?? undefined,
     specificName: fields.specificName ?? undefined,
     itemType: fields.itemType ?? undefined,
+    brand: fields.brand ?? undefined,
     gender: fields.gender ?? undefined,
     size: fields.size ?? undefined,
     front: fields.front ?? undefined,

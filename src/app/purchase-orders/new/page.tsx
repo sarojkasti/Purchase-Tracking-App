@@ -12,14 +12,16 @@ async function getMasterNames(type: string) {
 }
 
 export default async function NewPOPage() {
-  const [vendors, itemTypes, frontMaterials, templeMaterials, lensMaterials, colors] = await Promise.all([
-    prisma.vendor.findMany({ orderBy: { name: "asc" } }),
-    getMasterNames("ITEM_TYPE"),
-    getMasterNames("FRONT_MATERIAL"),
-    getMasterNames("TEMPLE_MATERIAL"),
-    getMasterNames("LENS_MATERIAL"),
-    prisma.color.findMany({ orderBy: { sortOrder: "asc" } }),
-  ]);
+  const [vendors, itemTypes, brands, frontMaterials, templeMaterials, lensMaterials, colors] =
+    await Promise.all([
+      prisma.vendor.findMany({ orderBy: { name: "asc" } }),
+      getMasterNames("ITEM_TYPE"),
+      getMasterNames("BRAND"),
+      getMasterNames("FRONT_MATERIAL"),
+      getMasterNames("TEMPLE_MATERIAL"),
+      getMasterNames("LENS_MATERIAL"),
+      prisma.color.findMany({ orderBy: { sortOrder: "asc" } }),
+    ]);
 
   return (
     <div>
@@ -27,6 +29,7 @@ export default async function NewPOPage() {
       <NewPOForm
         vendors={vendors}
         itemTypes={itemTypes}
+        brands={brands}
         frontMaterials={frontMaterials}
         templeMaterials={templeMaterials}
         lensMaterials={lensMaterials}

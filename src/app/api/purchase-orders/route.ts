@@ -25,6 +25,7 @@ type NewItemInput = {
   newmewSku?: string;
   specificName?: string;
   itemType?: string;
+  brand?: string;
   category?: string;
   gender?: string;
   size?: string;
@@ -46,6 +47,10 @@ type NewItemInput = {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+
+  if (!body.piNumber || !String(body.piNumber).trim()) {
+    return NextResponse.json({ error: "CHN PI No is required" }, { status: 400 });
+  }
 
   const orderDateAD = new Date(body.orderDateAD);
   const orderDateBS = adToBs(orderDateAD);
@@ -69,7 +74,6 @@ export async function POST(req: NextRequest) {
       orderDateBS,
       status: body.status || "DRAFT",
       transportMode: body.transportMode || "ROAD",
-      brand: body.brand || null,
       gender: body.gender || null,
       unitsOrdered: unitsOrderedFromItems || parseInt(body.unitsOrdered) || 0,
       piAmountRMB: piAmountRMBFromItems || parseFloat(body.piAmountRMB) || 0,
@@ -108,6 +112,7 @@ export async function POST(req: NextRequest) {
               specificName: i.specificName || null,
               itemType: i.itemType || null,
               mfgType: i.mfgType || null,
+              brand: i.brand || null,
               category: i.category || [front, temple, lens].filter(Boolean).join("+") || null,
               gender: i.gender || null,
               size: i.size || null,
@@ -138,6 +143,7 @@ export async function POST(req: NextRequest) {
       newmewSku: item.newmewSku,
       specificName: item.specificName,
       itemType: item.itemType,
+      brand: item.brand,
       gender: item.gender,
       size: item.size,
       front: item.front,
