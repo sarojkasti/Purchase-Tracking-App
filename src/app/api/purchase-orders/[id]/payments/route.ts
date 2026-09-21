@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { syncPaymentRollups } from "@/lib/poTotals";
 
 export async function POST(
   req: NextRequest,
@@ -12,6 +13,9 @@ export async function POST(
   if (!po) return NextResponse.json({ error: "PO not found" }, { status: 404 });
 
   const amountRMB = parseFloat(body.amountRMB) || 0;
+  if (amountRMB <= 0) {
+    return NextResponse.json({ error: "Payment amount must be greater than 0" }, { status: 400 });
+  }
   const exchangeRate = parseFloat(body.exchangeRate) || 0;
   const amountNPR = body.amountNPR ? parseFloat(body.amountNPR) : amountRMB * exchangeRate;
 
@@ -33,34 +37,7 @@ export async function POST(
     },
   });
 
-  // Roll up paid totals onto the PO
-  const payments = await prisma.payment.findMany({ where: { poId } });
-  const paidAdvanceRMB = payments
-    .filter((p) => p.paymentType === "ADVANCE")
-    .reduce((s, p) => s + p.amountRMB, 0);
-  const paidAdvanceNPR = payments
-    .filter((p) => p.paymentType === "ADVANCE")
-    .reduce((s, p) => s + p.amountNPR, 0);
-  const paidBalanceRMB = payments
-    .filter((p) => p.paymentType === "BALANCE")
-    .reduce((s, p) => s + p.amountRMB, 0);
-  const paidBalanceNPR = payments
-    .filter((p) => p.paymentType === "BALANCE")
-    .reduce((s, p) => s + p.amountNPR, 0);
-
-  await prisma.purchaseOrder.update({
-    where: { id: poId },
-    data: {
-      paidAdvanceRMB,
-      paidAdvanceNPR,
-      advancePaymentStatus:
-        paidAdvanceRMB <= 0 ? "PENDING" : paidAdvanceRMB < po.estAdvanceRMB ? "PARTIAL" : "PAID",
-      paidBalanceRMB,
-      paidBalanceNPR,
-      balancePaymentStatus:
-        paidBalanceRMB <= 0 ? "PENDING" : paidBalanceRMB < po.estBalanceRMB ? "PARTIAL" : "PAID",
-    },
-  });
+  await syncPaymentRollups(poId);
 
   return NextResponse.json(payment, { status: 201 });
 }

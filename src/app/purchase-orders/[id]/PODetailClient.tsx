@@ -6,11 +6,21 @@ import {
   SkuAutocomplete,
   ItemImageInput,
   ColorMultiSelect,
+  SearchSelect,
+  strOptions,
+  MFG_TYPE_OPTIONS,
   deriveCategory,
   deriveSize,
   type Product as ProductLookup,
   type Color,
 } from "@/components/ItemRowInputs";
+import {
+  pricingAmount,
+  pricingAmountText,
+  pricingRateText,
+  type PricingDriver,
+} from "@/lib/itemPricing";
+import { anyItemMissing, highlightedFields, isRowInUse } from "@/lib/itemValidation";
 
 type Item = {
   id: string;
@@ -87,12 +97,14 @@ type PO = {
   estAdvanceRMB: number;
   estAdvanceNPR: number;
   estAdvanceDate: string | null;
+  estAdvanceDateManual: boolean;
   paidAdvanceRMB: number;
   paidAdvanceNPR: number;
   advancePaymentStatus: string;
   estBalanceRMB: number;
   estBalanceNPR: number;
   estBalanceDate: string | null;
+  estBalanceDateManual: boolean;
   paidBalanceRMB: number;
   paidBalanceNPR: number;
   balancePaymentStatus: string;
@@ -247,6 +259,15 @@ export default function PODetailClient({
       {tab === "attachments" && <AttachmentsTab po={po} onRefresh={refresh} />}
 
       <style jsx global>{`
+        .field-invalid .input {
+          border-color: #dc2626;
+          background-color: #fef2f2;
+        }
+        .field-invalid button {
+          border-color: #dc2626;
+          background-color: #fef2f2;
+          color: #dc2626;
+        }
         .input {
           width: 100%;
           border: 1px solid #d1d5db;
@@ -291,31 +312,46 @@ function OverviewTab({
     actualArrivalDateAD: toInputDate(po.actualArrivalDateAD),
   });
 
-  const [costs, setCosts] = useState({
-    printingCostRMB: String(po.printingCostRMB || ""),
-    chinaFreightCostRMB: String(po.chinaFreightCostRMB || ""),
-    inspectionCostRMB: String(po.inspectionCostRMB || ""),
-  });
-  const [costsSaving, setCostsSaving] = useState(false);
+  const advancePaidTotalRMB = po.payments
+    .filter((p) => p.paymentType === "ADVANCE")
+    .reduce((s, p) => s + p.amountRMB, 0);
+  const advanceCarriedRMB =
+    po.estAdvanceRMB > 0 ? Math.round(Math.max(advancePaidTotalRMB - po.estAdvanceRMB, 0) * 100) / 100 : 0;
 
-  const extraCostsRMB =
-    (parseFloat(costs.printingCostRMB) || 0) +
-    (parseFloat(costs.chinaFreightCostRMB) || 0) +
-    (parseFloat(costs.inspectionCostRMB) || 0);
+  const extraCostsRMB = po.printingCostRMB + po.chinaFreightCostRMB + po.inspectionCostRMB;
   const totalPOAmountRMB = po.piAmountRMB + extraCostsRMB;
   const convRate = po.piAmountRMB ? po.piAmountNPR / po.piAmountRMB : 0;
   const totalPOAmountNPR = po.piAmountNPR + extraCostsRMB * convRate;
 
-  async function saveCosts() {
-    setCostsSaving(true);
+  const [details, setDetails] = useState({
+    piNumber: po.piNumber ?? "",
+    orderDateAD: toInputDate(po.orderDateAD),
+    transportMode: po.transportMode,
+  });
+  const [detailsSaving, setDetailsSaving] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const detailsChanged =
+    details.piNumber !== (po.piNumber ?? "") ||
+    details.orderDateAD !== toInputDate(po.orderDateAD) ||
+    details.transportMode !== po.transportMode;
+
+  async function saveDetails() {
+    if (!details.piNumber.trim() || !details.orderDateAD) {
+      setDetailsError("CHN PI No and Order Date are required.");
+      return;
+    }
+    setDetailsError(null);
+    setDetailsSaving(true);
     try {
       await onUpdate({
-        printingCostRMB: costs.printingCostRMB || 0,
-        chinaFreightCostRMB: costs.chinaFreightCostRMB || 0,
-        inspectionCostRMB: costs.inspectionCostRMB || 0,
+        piNumber: details.piNumber.trim(),
+        orderDateAD: details.orderDateAD,
+        transportMode: details.transportMode,
       });
+    } catch {
+      setDetailsError("Failed to save PO details.");
     } finally {
-      setCostsSaving(false);
+      setDetailsSaving(false);
     }
   }
 
@@ -326,64 +362,54 @@ function OverviewTab({
         <StatCard label="Units Shipped" value={po.unitsShipped.toLocaleString()} />
         <StatCard label="Units Received" value={po.unitsReceived.toLocaleString()} />
         <StatCard
-          label="PI Amount"
-          value={`¥${po.piAmountRMB.toLocaleString()}`}
-          sub={`NPR ${po.piAmountNPR.toLocaleString()}`}
+          label="PO Amount"
+          value={`¥${totalPOAmountRMB.toLocaleString()}`}
+          sub={`NPR ${totalPOAmountNPR.toLocaleString()}`}
         />
       </div>
 
       <div className="bg-white border rounded p-4">
-        <h3 className="text-sm font-medium mb-3">Additional Costs (RMB)</h3>
+        <h3 className="text-sm font-medium mb-3">PO Details</h3>
         <div className="grid grid-cols-4 gap-4 items-end">
           <label className="block">
-            <span className="block text-xs text-gray-500 mb-1">Printing Cost</span>
+            <span className="block text-xs text-gray-500 mb-1">CHN PI No</span>
             <input
-              type="number"
-              step="0.01"
               className="input"
-              value={costs.printingCostRMB}
-              onChange={(e) => setCosts({ ...costs, printingCostRMB: e.target.value })}
+              value={details.piNumber}
+              onChange={(e) => setDetails({ ...details, piNumber: e.target.value })}
             />
           </label>
           <label className="block">
-            <span className="block text-xs text-gray-500 mb-1">China Freight Cost</span>
+            <span className="block text-xs text-gray-500 mb-1">Order Date</span>
             <input
-              type="number"
-              step="0.01"
+              type="date"
               className="input"
-              value={costs.chinaFreightCostRMB}
-              onChange={(e) => setCosts({ ...costs, chinaFreightCostRMB: e.target.value })}
+              value={details.orderDateAD}
+              onChange={(e) => setDetails({ ...details, orderDateAD: e.target.value })}
             />
           </label>
           <label className="block">
-            <span className="block text-xs text-gray-500 mb-1">Inspection Cost</span>
-            <input
-              type="number"
-              step="0.01"
+            <span className="block text-xs text-gray-500 mb-1">Transport Mode</span>
+            <select
               className="input"
-              value={costs.inspectionCostRMB}
-              onChange={(e) => setCosts({ ...costs, inspectionCostRMB: e.target.value })}
-            />
+              value={details.transportMode}
+              onChange={(e) => setDetails({ ...details, transportMode: e.target.value })}
+            >
+              <option value="ROAD">Road</option>
+              <option value="AIRWAY">Airway</option>
+            </select>
           </label>
-          <div>
-            <span className="block text-xs text-gray-500 mb-1">Total PO Amount</span>
-            <div className="text-sm font-semibold">
-              ¥{totalPOAmountRMB.toLocaleString()}
-              <span className="block text-xs text-gray-400 font-normal">
-                NPR {totalPOAmountNPR.toLocaleString()}
-              </span>
-            </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={saveDetails}
+              disabled={detailsSaving || !detailsChanged}
+              className="rounded bg-gray-900 text-white text-sm px-4 py-1.5 hover:bg-gray-700 disabled:opacity-50"
+            >
+              {detailsSaving ? "Saving..." : "Save"}
+            </button>
+            {detailsError && <span className="text-red-600 text-xs">{detailsError}</span>}
           </div>
-        </div>
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={saveCosts}
-            disabled={costsSaving}
-            className="rounded bg-gray-900 text-white text-sm px-4 py-1.5 hover:bg-gray-700 disabled:opacity-50"
-          >
-            {costsSaving ? "Saving..." : "Save"}
-          </button>
         </div>
       </div>
 
@@ -391,7 +417,17 @@ function OverviewTab({
         <div className="bg-white border rounded p-4">
           <h3 className="text-sm font-medium mb-3">Advance Payment</h3>
           <Row label="Estimated" value={`¥${po.estAdvanceRMB.toLocaleString()} / NPR ${po.estAdvanceNPR.toLocaleString()}`} />
-          <Row label="Est. Date" value={fmtDate(po.estAdvanceDate)} />
+          <Row
+            label="Est. Date"
+            value={
+              <EstDateField
+                key={`${po.estAdvanceDate}-${po.estAdvanceDateManual}`}
+                date={po.estAdvanceDate}
+                manual={po.estAdvanceDateManual}
+                onSave={(v) => onUpdate({ estAdvanceDate: v })}
+              />
+            }
+          />
           <Row label="Paid" value={`¥${po.paidAdvanceRMB.toLocaleString()} / NPR ${po.paidAdvanceNPR.toLocaleString()}`} />
           <Row
             label="Status"
@@ -413,8 +449,24 @@ function OverviewTab({
         <div className="bg-white border rounded p-4">
           <h3 className="text-sm font-medium mb-3">Balance Payment</h3>
           <Row label="Estimated" value={`¥${po.estBalanceRMB.toLocaleString()} / NPR ${po.estBalanceNPR.toLocaleString()}`} />
-          <Row label="Est. Date" value={fmtDate(po.estBalanceDate)} />
+          <Row
+            label="Est. Date"
+            value={
+              <EstDateField
+                key={`${po.estBalanceDate}-${po.estBalanceDateManual}`}
+                date={po.estBalanceDate}
+                manual={po.estBalanceDateManual}
+                onSave={(v) => onUpdate({ estBalanceDate: v })}
+              />
+            }
+          />
           <Row label="Paid" value={`¥${po.paidBalanceRMB.toLocaleString()} / NPR ${po.paidBalanceNPR.toLocaleString()}`} />
+          {advanceCarriedRMB > 0 && (
+            <Row
+              label="Incl. from advance"
+              value={<span className="text-gray-500">¥{advanceCarriedRMB.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>}
+            />
+          )}
           <Row
             label="Status"
             value={
@@ -528,6 +580,39 @@ function DatePairField({
   );
 }
 
+function EstDateField({
+  date,
+  manual,
+  onSave,
+}: {
+  date: string | null;
+  manual: boolean;
+  onSave: (v: string | null) => Promise<void>;
+}) {
+  const current = toInputDate(date);
+  const [value, setValue] = useState(current);
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <input
+        type="date"
+        className="input"
+        style={{ width: "9.5rem" }}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => {
+          if (value !== current) void onSave(value || null);
+        }}
+      />
+      {date && <span className="text-[11px] text-gray-400">{manual ? "manual" : "auto"}</span>}
+      {manual && (
+        <button type="button" onClick={() => void onSave(null)} className="text-[11px] text-blue-600 hover:underline">
+          Reset
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex justify-between text-sm py-1">
@@ -553,6 +638,8 @@ type EditableItemRow = {
   sizeTemple: string;
   unitsOrdered: string;
   rateRMB: string;
+  amountRMB: string;
+  pricingDriver: PricingDriver;
   convRate: string;
   imageUrl: string;
 };
@@ -575,6 +662,8 @@ function itemToRow(item: Item): EditableItemRow {
     sizeTemple: sizeTemple || "",
     unitsOrdered: String(item.unitsOrdered),
     rateRMB: item.unitsOrdered ? String((item.amountRMB ?? 0) / item.unitsOrdered) : "",
+    amountRMB: item.amountRMB ? String(item.amountRMB) : "",
+    pricingDriver: "rate",
     convRate: item.convRate ? String(item.convRate) : "",
     imageUrl: item.imageUrl ?? "",
   };
@@ -597,16 +686,14 @@ function emptyNewItemRow(defaultConvRate: string): EditableItemRow {
     sizeTemple: "",
     unitsOrdered: "",
     rateRMB: "",
+    amountRMB: "",
+    pricingDriver: "rate",
     convRate: defaultConvRate,
     imageUrl: "",
   };
 }
 
-function rowAmountRMB(row: { unitsOrdered: string; rateRMB: string }) {
-  const units = parseFloat(row.unitsOrdered) || 0;
-  const rate = parseFloat(row.rateRMB) || 0;
-  return units * rate;
-}
+const rowAmountRMB = pricingAmount;
 
 function ItemsTab({
   po,
@@ -635,6 +722,11 @@ function ItemsTab({
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showErrors, setShowErrors] = useState(false);
+
+  const existingErrs = (itemId: string, row: EditableItemRow) =>
+    highlightedFields(row, showErrors, pendingDeletes.has(itemId));
+  const newErrs = (row: EditableItemRow) => highlightedFields(row, showErrors, !isRowInUse(row));
 
   const [costs, setCosts] = useState({
     printingCostRMB: String(po.printingCostRMB || ""),
@@ -741,11 +833,12 @@ function ItemsTab({
     });
   }
 
-  function addNewRow() {
-    setNewRows((rows) => [
-      ...rows,
-      { ...emptyNewItemRow(defaultConvRate), key: `${Date.now()}-${Math.random()}` },
-    ]);
+  function addNewRow(afterKey?: string) {
+    const fresh = { ...emptyNewItemRow(defaultConvRate), key: `${Date.now()}-${Math.random()}` };
+    setNewRows((rows) => {
+      const at = afterKey ? rows.findIndex((r) => r.key === afterKey) + 1 : rows.length;
+      return [...rows.slice(0, at), fresh, ...rows.slice(at)];
+    });
   }
 
   function removeNewRow(key: string) {
@@ -753,6 +846,18 @@ function ItemsTab({
   }
 
   async function handleSavePO() {
+    const hasMissing = anyItemMissing([
+      ...po.items.filter((item) => !pendingDeletes.has(item.id)).map((item) => rows[item.id] ?? itemToRow(item)),
+      ...newRows.filter(isRowInUse),
+    ]);
+    if (hasMissing) {
+      setShowErrors(true);
+      setTimeout(() => {
+        document.querySelector(".field-invalid")?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      }, 50);
+      return;
+    }
+    setShowErrors(false);
     setSaving(true);
     setError(null);
     try {
@@ -810,21 +915,21 @@ function ItemsTab({
         <table className="text-sm border rounded border-separate border-spacing-0">
           <thead className="bg-gray-100 text-left text-gray-600">
             <tr>
-              <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU</th>
+              <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[9rem]">Newmew SKU</th>
               <th className="px-2 py-1.5 min-w-[11rem]">Name</th>
-              <th className="px-2 py-1.5 min-w-[8rem]">Type</th>
-              <th className="px-2 py-1.5 min-w-[8rem]">Brand</th>
-              <th className="px-2 py-1.5 min-w-[8rem]">Mfg Type</th>
-              <th className="px-2 py-1.5 min-w-[7rem]">Front</th>
-              <th className="px-2 py-1.5 min-w-[7rem]">Temple</th>
-              <th className="px-2 py-1.5 min-w-[7rem]">Lens</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Type <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Brand <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Mfg Type <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Front <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Temple <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
-              <th className="px-2 py-1.5 min-w-[10rem]">Colors</th>
-              <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T)</th>
-              <th className="px-2 py-1.5 min-w-[6rem]">Units</th>
-              <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate</th>
-              <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB</th>
+              <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Amount NPR</th>
               <th className="px-2 py-1.5 min-w-[4rem]">Image</th>
               <th className="px-2 py-1.5 w-10"></th>
@@ -836,7 +941,7 @@ function ItemsTab({
               const isPendingDelete = pendingDeletes.has(item.id);
               return (
                 <tr key={item.id} className={`border-t ${isPendingDelete ? "opacity-40" : ""}`}>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("chineseSku") ? "field-invalid" : ""}`}>
                     <SkuAutocomplete
                       value={row.chineseSku}
                       onChange={(v) => updateExistingRow(item.id, { chineseSku: v })}
@@ -861,96 +966,61 @@ function ItemsTab({
                       onChange={(e) => updateExistingRow(item.id, { specificName: e.target.value })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("itemType") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.itemType}
-                      onChange={(e) => updateExistingRow(item.id, { itemType: e.target.value })}
-                    >
-                      {itemTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(itemTypes)}
+                      allowEmpty={false}
+                      onChange={(v) => updateExistingRow(item.id, { itemType: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("brand") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.brand}
-                      onChange={(e) => updateExistingRow(item.id, { brand: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {brands.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(brands)}
+                      onChange={(v) => updateExistingRow(item.id, { brand: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("mfgType") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.mfgType}
-                      onChange={(e) => updateExistingRow(item.id, { mfgType: e.target.value })}
-                    >
-                      <option value="READY_GOODS">Ready Goods</option>
-                      <option value="PRODUCTION">Production</option>
-                    </select>
+                      options={MFG_TYPE_OPTIONS}
+                      allowEmpty={false}
+                      onChange={(v) => updateExistingRow(item.id, { mfgType: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("front") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.front}
-                      onChange={(e) => updateExistingRow(item.id, { front: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {frontMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(frontMaterials)}
+                      onChange={(v) => updateExistingRow(item.id, { front: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("temple") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.temple}
-                      onChange={(e) => updateExistingRow(item.id, { temple: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {templeMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(templeMaterials)}
+                      onChange={(v) => updateExistingRow(item.id, { temple: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("lens") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={row.lens}
-                      onChange={(e) => updateExistingRow(item.id, { lens: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {lensMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(lensMaterials)}
+                      onChange={(v) => updateExistingRow(item.id, { lens: v })}
+                    />
                   </td>
                   <td className="px-1 py-1 align-top">
                     <input className="input bg-gray-50" value={deriveCategory(row.front, row.temple, row.lens)} disabled />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("colors") ? "field-invalid" : ""}`}>
                     <ColorMultiSelect
                       colors={colors}
                       selected={row.colors}
                       onChange={(selected) => updateExistingRow(item.id, { colors: selected })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("size") ? "field-invalid" : ""}`}>
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
@@ -977,7 +1047,7 @@ function ItemsTab({
                       />
                     </div>
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("units") ? "field-invalid" : ""}`}>
                     <input
                       type="number"
                       className="input"
@@ -985,17 +1055,27 @@ function ItemsTab({
                       onChange={(e) => updateExistingRow(item.id, { unitsOrdered: e.target.value })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("price") ? "field-invalid" : ""}`}>
                     <input
                       type="number"
-                      step="0.01"
+                      step="any"
                       className="input"
-                      value={row.rateRMB}
-                      onChange={(e) => updateExistingRow(item.id, { rateRMB: e.target.value })}
+                      value={pricingRateText(row)}
+                      onChange={(e) =>
+                        updateExistingRow(item.id, { rateRMB: e.target.value, pricingDriver: "rate" })
+                      }
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <input className="input bg-gray-50" value={rowAmountRMB(row) ? rowAmountRMB(row).toFixed(2) : ""} disabled />
+                  <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("price") ? "field-invalid" : ""}`}>
+                    <input
+                      type="number"
+                      step="any"
+                      className="input"
+                      value={pricingAmountText(row)}
+                      onChange={(e) =>
+                        updateExistingRow(item.id, { amountRMB: e.target.value, pricingDriver: "amount" })
+                      }
+                    />
                   </td>
                   <td className="px-1 py-1 align-top">
                     <input
@@ -1015,7 +1095,15 @@ function ItemsTab({
                       onClear={() => updateExistingRow(item.id, { imageUrl: "" })}
                     />
                   </td>
-                  <td className="px-1 py-1 text-center align-top">
+                  <td className="px-1 py-1 text-center align-top whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => addNewRow()}
+                      className="text-blue-600 hover:underline text-xs mr-2"
+                      title="Add item row"
+                    >
+                      + Add
+                    </button>
                     {isPendingDelete ? (
                       <button
                         type="button"
@@ -1040,7 +1128,7 @@ function ItemsTab({
 
             {newRows.map((newRow) => (
             <tr key={newRow.key} className="border-t bg-gray-50/50">
-              <td className="px-1 py-1 align-top">
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("chineseSku") ? "field-invalid" : ""}`}>
                 <SkuAutocomplete
                   value={newRow.chineseSku}
                   onChange={(v) => updateNewRow(newRow.key, { chineseSku: v })}
@@ -1061,96 +1149,61 @@ function ItemsTab({
                   onChange={(e) => updateNewRow(newRow.key, { specificName: e.target.value })}
                 />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("itemType") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.itemType}
-                  onChange={(e) => updateNewRow(newRow.key, { itemType: e.target.value })}
-                >
-                  {itemTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
+                  options={strOptions(itemTypes)}
+                  allowEmpty={false}
+                  onChange={(v) => updateNewRow(newRow.key, { itemType: v })}
+                />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("brand") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.brand}
-                  onChange={(e) => updateNewRow(newRow.key, { brand: e.target.value })}
-                >
-                  <option value="">-</option>
-                  {brands.map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </select>
+                  options={strOptions(brands)}
+                  onChange={(v) => updateNewRow(newRow.key, { brand: v })}
+                />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("mfgType") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.mfgType}
-                  onChange={(e) => updateNewRow(newRow.key, { mfgType: e.target.value })}
-                >
-                  <option value="READY_GOODS">Ready Goods</option>
-                  <option value="PRODUCTION">Production</option>
-                </select>
+                  options={MFG_TYPE_OPTIONS}
+                  allowEmpty={false}
+                  onChange={(v) => updateNewRow(newRow.key, { mfgType: v })}
+                />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("front") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.front}
-                  onChange={(e) => updateNewRow(newRow.key, { front: e.target.value })}
-                >
-                  <option value="">-</option>
-                  {frontMaterials.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                  options={strOptions(frontMaterials)}
+                  onChange={(v) => updateNewRow(newRow.key, { front: v })}
+                />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("temple") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.temple}
-                  onChange={(e) => updateNewRow(newRow.key, { temple: e.target.value })}
-                >
-                  <option value="">-</option>
-                  {templeMaterials.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                  options={strOptions(templeMaterials)}
+                  onChange={(v) => updateNewRow(newRow.key, { temple: v })}
+                />
               </td>
-              <td className="px-1 py-1 align-top">
-                <select
-                  className="input"
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("lens") ? "field-invalid" : ""}`}>
+                <SearchSelect
                   value={newRow.lens}
-                  onChange={(e) => updateNewRow(newRow.key, { lens: e.target.value })}
-                >
-                  <option value="">-</option>
-                  {lensMaterials.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                  options={strOptions(lensMaterials)}
+                  onChange={(v) => updateNewRow(newRow.key, { lens: v })}
+                />
               </td>
               <td className="px-1 py-1 align-top">
                 <input className="input bg-gray-50" value={deriveCategory(newRow.front, newRow.temple, newRow.lens)} disabled />
               </td>
-              <td className="px-1 py-1 align-top">
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("colors") ? "field-invalid" : ""}`}>
                 <ColorMultiSelect
                   colors={colors}
                   selected={newRow.colors}
                   onChange={(selected) => updateNewRow(newRow.key, { colors: selected })}
                 />
               </td>
-              <td className="px-1 py-1 align-top">
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("size") ? "field-invalid" : ""}`}>
                 <div className="flex items-center gap-1">
                   <input
                     type="number"
@@ -1177,7 +1230,7 @@ function ItemsTab({
                   />
                 </div>
               </td>
-              <td className="px-1 py-1 align-top">
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("units") ? "field-invalid" : ""}`}>
                 <input
                   type="number"
                   className="input"
@@ -1185,17 +1238,27 @@ function ItemsTab({
                   onChange={(e) => updateNewRow(newRow.key, { unitsOrdered: e.target.value })}
                 />
               </td>
-              <td className="px-1 py-1 align-top">
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("price") ? "field-invalid" : ""}`}>
                 <input
                   type="number"
-                  step="0.01"
+                  step="any"
                   className="input"
-                  value={newRow.rateRMB}
-                  onChange={(e) => updateNewRow(newRow.key, { rateRMB: e.target.value })}
+                  value={pricingRateText(newRow)}
+                  onChange={(e) =>
+                    updateNewRow(newRow.key, { rateRMB: e.target.value, pricingDriver: "rate" })
+                  }
                 />
               </td>
-              <td className="px-1 py-1 align-top">
-                <input className="input bg-gray-50" value={rowAmountRMB(newRow) ? rowAmountRMB(newRow).toFixed(2) : ""} disabled />
+              <td className={`px-1 py-1 align-top ${newErrs(newRow).has("price") ? "field-invalid" : ""}`}>
+                <input
+                  type="number"
+                  step="any"
+                  className="input"
+                  value={pricingAmountText(newRow)}
+                  onChange={(e) =>
+                    updateNewRow(newRow.key, { amountRMB: e.target.value, pricingDriver: "amount" })
+                  }
+                />
               </td>
               <td className="px-1 py-1 align-top">
                 <input
@@ -1215,7 +1278,15 @@ function ItemsTab({
                   onClear={() => updateNewRow(newRow.key, { imageUrl: "" })}
                 />
               </td>
-              <td className="px-1 py-1 text-center align-top">
+              <td className="px-1 py-1 text-center align-top whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => addNewRow(newRow.key)}
+                  className="text-blue-600 hover:underline text-xs mr-2"
+                  title="Add item row below"
+                >
+                  + Add
+                </button>
                 <button
                   type="button"
                   onClick={() => removeNewRow(newRow.key)}
@@ -1229,13 +1300,15 @@ function ItemsTab({
           </tbody>
         </table>
       </div>
-      <button
-        type="button"
-        onClick={addNewRow}
-        className="text-sm text-blue-600 hover:underline"
-      >
-        + Add Item Row
-      </button>
+      {visibleItems.length === 0 && newRows.length === 0 && (
+        <button
+          type="button"
+          onClick={() => addNewRow()}
+          className="text-sm text-blue-600 hover:underline"
+        >
+          + Add Item Row
+        </button>
+      )}
 
       <div className="bg-white border rounded p-4">
         <h3 className="text-sm font-medium mb-3">Additional Costs (RMB)</h3>
@@ -1316,29 +1389,93 @@ function ItemsTab({
 }
 
 function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
+  const emptyForm = () => ({
     paymentDate: new Date().toISOString().slice(0, 10),
     paymentType: "ADVANCE",
     amountRMB: "",
     exchangeRate: "",
     notes: "",
   });
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  async function handleAdd(e: React.FormEvent) {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const fmtRMB = (n: number) => `¥${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
+  // Work out what is still due as if the payment being edited didn't exist. An
+  // advance beyond its estimate counts toward the balance (same rule as the server).
+  const others = po.payments.filter((p) => p.id !== editingId);
+  const sumType = (t: string) => others.filter((p) => p.paymentType === t).reduce((s, p) => s + p.amountRMB, 0);
+  const advRaw = sumType("ADVANCE");
+  const balRaw = sumType("BALANCE");
+  const carry = po.estAdvanceRMB > 0 ? Math.max(advRaw - po.estAdvanceRMB, 0) : 0;
+  const advPaid = advRaw - carry;
+  const balPaid = balRaw + carry;
+  const amount = parseFloat(form.amountRMB) || 0;
+
+  let info: { label: string; est: number; paid: number; remaining: number; carriedIn: number } | null = null;
+  const notes: string[] = [];
+  if (form.paymentType === "ADVANCE" && po.estAdvanceRMB > 0) {
+    const remaining = r2(Math.max(po.estAdvanceRMB - advPaid, 0));
+    info = { label: "Advance", est: po.estAdvanceRMB, paid: r2(advPaid), remaining, carriedIn: 0 };
+    const excess = r2(Math.max(amount - remaining, 0));
+    if (amount > 0 && excess > 0) {
+      notes.push(`${fmtRMB(excess)} is more than the remaining advance and will be adjusted against the balance.`);
+      const balOver = r2(Math.max(balPaid + excess - po.estBalanceRMB, 0));
+      if (po.estBalanceRMB > 0 && balOver > 0) notes.push(`That also exceeds the balance due by ${fmtRMB(balOver)}.`);
+    }
+  } else if (form.paymentType === "BALANCE" && po.estBalanceRMB > 0) {
+    const remaining = r2(Math.max(po.estBalanceRMB - balPaid, 0));
+    info = { label: "Balance", est: po.estBalanceRMB, paid: r2(balPaid), remaining, carriedIn: r2(carry) };
+    const over = r2(Math.max(amount - remaining, 0));
+    if (amount > 0 && over > 0) notes.push(`${fmtRMB(over)} is more than the remaining balance (${fmtRMB(remaining)}).`);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingId(null);
+    setForm(emptyForm());
+    setError(null);
+  }
+
+  function startEdit(p: Payment) {
+    setEditingId(p.id);
+    setForm({
+      paymentDate: p.paymentDate.slice(0, 10),
+      paymentType: p.paymentType,
+      amountRMB: String(p.amountRMB),
+      exchangeRate: String(p.exchangeRate),
+      notes: p.notes ?? "",
+    });
+    setShowForm(true);
+    setError(null);
+  }
+
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
+    if (notes.length > 0 && !confirm(`${notes.join("\n")}\n\nSave this payment anyway?`)) return;
     setSaving(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/purchase-orders/${po.id}/payments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) throw new Error("Failed to add payment");
-      setForm({ paymentDate: new Date().toISOString().slice(0, 10), paymentType: "ADVANCE", amountRMB: "", exchangeRate: "", notes: "" });
-      setShowForm(false);
+      const res = await fetch(
+        editingId ? `/api/purchase-orders/${po.id}/payments/${editingId}` : `/api/purchase-orders/${po.id}/payments`,
+        {
+          method: editingId ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(form),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save payment");
+      }
+      closeForm();
       await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save payment");
     } finally {
       setSaving(false);
     }
@@ -1347,19 +1484,24 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
   async function handleDelete(paymentId: string) {
     if (!confirm("Delete this payment?")) return;
     await fetch(`/api/purchase-orders/${po.id}/payments/${paymentId}`, { method: "DELETE" });
+    if (editingId === paymentId) closeForm();
     await onRefresh();
   }
 
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <button onClick={() => setShowForm(!showForm)} className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700">
+        <button
+          onClick={() => (showForm ? closeForm() : setShowForm(true))}
+          className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700"
+        >
           {showForm ? "Cancel" : "+ Record Payment"}
         </button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleAdd} className="bg-white border rounded p-4 grid grid-cols-3 gap-3">
+        <form onSubmit={handleSave} className="bg-white border rounded p-4 grid grid-cols-3 gap-3">
+          {editingId && <div className="col-span-3 text-sm font-medium">Editing payment</div>}
           <input type="date" className="input" value={form.paymentDate} onChange={(e) => setForm({ ...form, paymentDate: e.target.value })} required />
           <select className="input" value={form.paymentType} onChange={(e) => setForm({ ...form, paymentType: e.target.value })}>
             <option value="ADVANCE">Advance</option>
@@ -1367,12 +1509,25 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
             <option value="CUSTOM_DUTY">Custom Duty</option>
             <option value="OTHER">Other</option>
           </select>
-          <input type="number" step="0.01" className="input" placeholder="Amount RMB" value={form.amountRMB} onChange={(e) => setForm({ ...form, amountRMB: e.target.value })} required />
+          <input type="number" step="0.01" min="0.01" className="input" placeholder="Amount RMB" value={form.amountRMB} onChange={(e) => setForm({ ...form, amountRMB: e.target.value })} required />
           <input type="number" step="0.01" className="input" placeholder="Exchange Rate" value={form.exchangeRate} onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })} required />
           <input className="input col-span-2" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          {info && (
+            <div className="col-span-3 text-xs text-gray-500">
+              {info.label}: estimated {fmtRMB(info.est)}, paid {fmtRMB(info.paid)}
+              {info.carriedIn > 0 && ` (includes ${fmtRMB(info.carriedIn)} adjusted from the advance)`},{" "}
+              <span className="font-medium text-gray-700">remaining {fmtRMB(info.remaining)}</span>
+              {notes.length > 0 && (
+                <div className="mt-1 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-800">
+                  {notes.join(" ")} You can still save it.
+                </div>
+              )}
+            </div>
+          )}
+          {error && <div className="col-span-3 text-sm text-red-600">{error}</div>}
           <div className="col-span-3">
             <button type="submit" disabled={saving} className="rounded bg-gray-900 text-white text-sm px-4 py-2 hover:bg-gray-700 disabled:opacity-50">
-              {saving ? "Saving..." : "Record Payment"}
+              {saving ? "Saving..." : editingId ? "Save Changes" : "Record Payment"}
             </button>
           </div>
         </form>
@@ -1383,7 +1538,7 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
           <thead className="bg-gray-100 text-left text-gray-600">
             <tr>
               <th className="px-3 py-2">Date</th>
-              <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">Type <span className="text-red-600">*</span></th>
               <th className="px-3 py-2">RMB</th>
               <th className="px-3 py-2">Rate</th>
               <th className="px-3 py-2">NPR</th>
@@ -1393,14 +1548,17 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
           </thead>
           <tbody>
             {po.payments.map((p) => (
-              <tr key={p.id} className="border-t">
+              <tr key={p.id} className={`border-t ${editingId === p.id ? "bg-amber-50" : ""}`}>
                 <td className="px-3 py-2">{fmtDate(p.paymentDate)}</td>
                 <td className="px-3 py-2">{p.paymentType}</td>
                 <td className="px-3 py-2">¥{p.amountRMB.toLocaleString()}</td>
                 <td className="px-3 py-2">{p.exchangeRate}</td>
                 <td className="px-3 py-2">NPR {p.amountNPR.toLocaleString()}</td>
                 <td className="px-3 py-2">{p.notes ?? "-"}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
+                  <button onClick={() => startEdit(p)} className="text-blue-600 hover:underline text-xs mr-3">
+                    Edit
+                  </button>
                   <button onClick={() => handleDelete(p.id)} className="text-red-600 hover:underline text-xs">
                     Delete
                   </button>
@@ -1633,7 +1791,7 @@ function AttachmentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<vo
         <table className="min-w-full text-sm">
           <thead className="bg-gray-100 text-left text-gray-600">
             <tr>
-              <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">Type <span className="text-red-600">*</span></th>
               <th className="px-3 py-2">File Name</th>
               <th className="px-3 py-2">Size</th>
               <th className="px-3 py-2">Uploaded</th>

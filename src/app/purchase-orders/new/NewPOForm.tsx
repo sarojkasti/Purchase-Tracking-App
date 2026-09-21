@@ -6,11 +6,21 @@ import {
   SkuAutocomplete,
   ItemImageInput,
   ColorMultiSelect,
+  SearchSelect,
+  strOptions,
+  MFG_TYPE_OPTIONS,
   deriveCategory,
   deriveSize,
   type Product,
   type Color,
 } from "@/components/ItemRowInputs";
+import {
+  pricingAmount,
+  pricingAmountText,
+  pricingRateText,
+  type PricingDriver,
+} from "@/lib/itemPricing";
+import { anyItemMissing, highlightedFields, isRowInUse } from "@/lib/itemValidation";
 
 type Vendor = {
   id: string;
@@ -45,6 +55,8 @@ type ItemRow = {
   colors: string[];
   unitsOrdered: string;
   rateRMB: string;
+  amountRMB: string;
+  pricingDriver: PricingDriver;
   imageUrl: string;
 };
 
@@ -66,15 +78,13 @@ function emptyItemRow(): ItemRow {
     colors: [],
     unitsOrdered: "",
     rateRMB: "",
+    amountRMB: "",
+    pricingDriver: "rate",
     imageUrl: "",
   };
 }
 
-function itemAmountRMB(item: ItemRow) {
-  const units = parseFloat(item.unitsOrdered) || 0;
-  const rate = parseFloat(item.rateRMB) || 0;
-  return units * rate;
-}
+const itemAmountRMB = pricingAmount;
 
 export default function NewPOForm({
   vendors,
@@ -96,6 +106,8 @@ export default function NewPOForm({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showErrors, setShowErrors] = useState(false);
+  const newErrs = (row: ItemRow) => highlightedFields(row, showErrors, !isRowInUse(row));
 
   const [vendorId, setVendorId] = useState(vendors[0]?.id ?? "");
   const [poSuffix, setPoSuffix] = useState("");
@@ -209,16 +221,11 @@ export default function NewPOForm({
     setItems((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
-  function addItemRow() {
-    setItems((rows) => {
-      const newIndex = rows.length;
-      requestAnimationFrame(() => {
-        const el = document.querySelector<HTMLInputElement>(
-          `[data-row-first-field="${newIndex}"]`
-        );
-        el?.focus();
-      });
-      return [...rows, emptyItemRow()];
+  function addItemRow(afterIndex: number) {
+    const newIndex = afterIndex + 1;
+    setItems((rows) => [...rows.slice(0, newIndex), emptyItemRow(), ...rows.slice(newIndex)]);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>(`[data-row-first-field="${newIndex}"]`)?.focus();
     });
   }
 
@@ -258,6 +265,14 @@ export default function NewPOForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (anyItemMissing(items.filter(isRowInUse))) {
+      setShowErrors(true);
+      setTimeout(() => {
+        document.querySelector(".field-invalid")?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      }, 50);
+      return;
+    }
+    setShowErrors(false);
     setSaving(true);
     setError(null);
     try {
@@ -304,8 +319,6 @@ export default function NewPOForm({
 
   return (
     <form onSubmit={handleSubmit} className="max-w-6xl bg-white border rounded p-6 space-y-4">
-      {error && <div className="text-red-600 text-sm">{error}</div>}
-
       <div className="grid grid-cols-3 gap-4">
         <Field label="Vendor" required>
           <select className="input" value={vendorId} onChange={(e) => setVendorId(e.target.value)} required>
@@ -381,21 +394,21 @@ export default function NewPOForm({
           <table className="text-sm border rounded border-separate border-spacing-0">
             <thead className="bg-gray-100 text-left text-gray-600">
               <tr>
-                <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU</th>
+                <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[9rem]">Newmew SKU</th>
                 <th className="px-2 py-1.5 min-w-[11rem]">Name</th>
-                <th className="px-2 py-1.5 min-w-[8rem]">Type</th>
-                <th className="px-2 py-1.5 min-w-[8rem]">Brand</th>
-                <th className="px-2 py-1.5 min-w-[8rem]">Mfg Type</th>
-                <th className="px-2 py-1.5 min-w-[7rem]">Front</th>
-                <th className="px-2 py-1.5 min-w-[7rem]">Temple</th>
-                <th className="px-2 py-1.5 min-w-[7rem]">Lens</th>
+                <th className="px-2 py-1.5 min-w-[8rem]">Type <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[8rem]">Brand <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[8rem]">Mfg Type <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[7rem]">Front <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[7rem]">Temple <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
-                <th className="px-2 py-1.5 min-w-[10rem]">Colors</th>
-                <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T)</th>
-                <th className="px-2 py-1.5 min-w-[6rem]">Units</th>
-                <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate</th>
-                <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB</th>
+                <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[8rem]">Amount NPR</th>
                 <th className="px-2 py-1.5 min-w-[4rem]">Image</th>
                 <th className="px-2 py-1.5 w-10"></th>
@@ -404,7 +417,7 @@ export default function NewPOForm({
             <tbody>
               {items.map((item, idx) => (
                 <tr key={idx} className="border-t">
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("chineseSku") ? "field-invalid" : ""}`}>
                     <SkuAutocomplete
                       value={item.chineseSku}
                       onChange={(v) => updateItem(idx, { chineseSku: v })}
@@ -427,84 +440,49 @@ export default function NewPOForm({
                       onChange={(e) => updateItem(idx, { specificName: e.target.value })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("itemType") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.itemType}
-                      onChange={(e) => updateItem(idx, { itemType: e.target.value })}
-                    >
-                      {itemTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(itemTypes)}
+                      allowEmpty={false}
+                      onChange={(v) => updateItem(idx, { itemType: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("brand") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.brand}
-                      onChange={(e) => updateItem(idx, { brand: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {brands.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(brands)}
+                      onChange={(v) => updateItem(idx, { brand: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("mfgType") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.mfgType}
-                      onChange={(e) => updateItem(idx, { mfgType: e.target.value })}
-                    >
-                      <option value="READY_GOODS">Ready Goods</option>
-                      <option value="PRODUCTION">Production</option>
-                    </select>
+                      options={MFG_TYPE_OPTIONS}
+                      allowEmpty={false}
+                      onChange={(v) => updateItem(idx, { mfgType: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("front") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.front}
-                      onChange={(e) => updateItem(idx, { front: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {frontMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(frontMaterials)}
+                      onChange={(v) => updateItem(idx, { front: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("temple") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.temple}
-                      onChange={(e) => updateItem(idx, { temple: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {templeMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(templeMaterials)}
+                      onChange={(v) => updateItem(idx, { temple: v })}
+                    />
                   </td>
-                  <td className="px-1 py-1 align-top">
-                    <select
-                      className="input"
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("lens") ? "field-invalid" : ""}`}>
+                    <SearchSelect
                       value={item.lens}
-                      onChange={(e) => updateItem(idx, { lens: e.target.value })}
-                    >
-                      <option value="">-</option>
-                      {lensMaterials.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
+                      options={strOptions(lensMaterials)}
+                      onChange={(v) => updateItem(idx, { lens: v })}
+                    />
                   </td>
                   <td className="px-1 py-1 align-top">
                     <input
@@ -513,14 +491,14 @@ export default function NewPOForm({
                       disabled
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("colors") ? "field-invalid" : ""}`}>
                     <ColorMultiSelect
                       colors={colors}
                       selected={item.colors}
                       onChange={(selected) => updateItem(idx, { colors: selected })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("size") ? "field-invalid" : ""}`}>
                     <div className="flex items-center gap-1">
                       <input
                         type="number"
@@ -547,7 +525,7 @@ export default function NewPOForm({
                       />
                     </div>
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("units") ? "field-invalid" : ""}`}>
                     <input
                       type="number"
                       className="input"
@@ -555,20 +533,22 @@ export default function NewPOForm({
                       onChange={(e) => updateItem(idx, { unitsOrdered: e.target.value })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("price") ? "field-invalid" : ""}`}>
                     <input
                       type="number"
-                      step="0.01"
+                      step="any"
                       className="input"
-                      value={item.rateRMB}
-                      onChange={(e) => updateItem(idx, { rateRMB: e.target.value })}
+                      value={pricingRateText(item)}
+                      onChange={(e) => updateItem(idx, { rateRMB: e.target.value, pricingDriver: "rate" })}
                     />
                   </td>
-                  <td className="px-1 py-1 align-top">
+                  <td className={`px-1 py-1 align-top ${newErrs(item).has("price") ? "field-invalid" : ""}`}>
                     <input
-                      className="input bg-gray-50"
-                      value={itemAmountRMB(item) ? itemAmountRMB(item).toFixed(2) : ""}
-                      disabled
+                      type="number"
+                      step="any"
+                      className="input"
+                      value={pricingAmountText(item)}
+                      onChange={(e) => updateItem(idx, { amountRMB: e.target.value, pricingDriver: "amount" })}
                     />
                   </td>
                   <td className="px-1 py-1 align-top">
@@ -589,7 +569,15 @@ export default function NewPOForm({
                       onClear={() => updateItem(idx, { imageUrl: "" })}
                     />
                   </td>
-                  <td className="px-1 py-1 text-center align-top">
+                  <td className="px-1 py-1 text-center align-top whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => addItemRow(idx)}
+                      className="text-blue-600 hover:underline text-xs mr-2"
+                      title="Add item row below"
+                    >
+                      + Add
+                    </button>
                     {items.length > 1 && (
                       <button
                         type="button"
@@ -605,13 +593,6 @@ export default function NewPOForm({
             </tbody>
           </table>
         </div>
-        <button
-          type="button"
-          onClick={addItemRow}
-          className="mt-2 text-sm text-blue-600 hover:underline"
-        >
-          + Add Item Row
-        </button>
       </div>
 
       <div className="border-t pt-4">
@@ -688,6 +669,8 @@ export default function NewPOForm({
         <textarea className="input" rows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
       </Field>
 
+      {error && <div className="text-red-600 text-sm">{error}</div>}
+
       <div className="flex gap-2 pt-2">
         <button
           type="submit"
@@ -706,6 +689,15 @@ export default function NewPOForm({
       </div>
 
       <style jsx global>{`
+        .field-invalid .input {
+          border-color: #dc2626;
+          background-color: #fef2f2;
+        }
+        .field-invalid button {
+          border-color: #dc2626;
+          background-color: #fef2f2;
+          color: #dc2626;
+        }
         .input {
           width: 100%;
           border: 1px solid #d1d5db;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { adToBs } from "@/lib/bsDate";
+import { recalcPoTotals } from "@/lib/poTotals";
 
 export async function GET(
   _req: NextRequest,
@@ -30,17 +31,17 @@ export async function PUT(
 
   const orderDateAD = body.orderDateAD ? new Date(body.orderDateAD) : undefined;
 
-  const po = await prisma.purchaseOrder.update({
+  let po = await prisma.purchaseOrder.update({
     where: { id },
     data: {
       poNumber: body.poNumber,
-      piNumber: body.piNumber || null,
+      piNumber: body.piNumber !== undefined ? body.piNumber || null : undefined,
       vendorId: body.vendorId,
       orderDateAD,
       orderDateBS: orderDateAD ? adToBs(orderDateAD) : undefined,
       status: body.status,
       transportMode: body.transportMode,
-      gender: body.gender || null,
+      gender: body.gender !== undefined ? body.gender || null : undefined,
       unitsOrdered: body.unitsOrdered !== undefined ? parseInt(body.unitsOrdered) : undefined,
       unitsShipped: body.unitsShipped !== undefined ? parseInt(body.unitsShipped) : undefined,
       unitsReceived: body.unitsReceived !== undefined ? parseInt(body.unitsReceived) : undefined,
@@ -51,13 +52,25 @@ export async function PUT(
       inspectionCostRMB: body.inspectionCostRMB !== undefined ? parseFloat(body.inspectionCostRMB) : undefined,
       estAdvanceRMB: body.estAdvanceRMB !== undefined ? parseFloat(body.estAdvanceRMB) : undefined,
       estAdvanceNPR: body.estAdvanceNPR !== undefined ? parseFloat(body.estAdvanceNPR) : undefined,
-      estAdvanceDate: body.estAdvanceDate ? new Date(body.estAdvanceDate) : undefined,
+      estAdvanceDate:
+        body.estAdvanceDate !== undefined
+          ? body.estAdvanceDate
+            ? new Date(body.estAdvanceDate)
+            : null
+          : undefined,
+      estAdvanceDateManual: body.estAdvanceDate !== undefined ? !!body.estAdvanceDate : undefined,
       paidAdvanceRMB: body.paidAdvanceRMB !== undefined ? parseFloat(body.paidAdvanceRMB) : undefined,
       paidAdvanceNPR: body.paidAdvanceNPR !== undefined ? parseFloat(body.paidAdvanceNPR) : undefined,
       advancePaymentStatus: body.advancePaymentStatus || undefined,
       estBalanceRMB: body.estBalanceRMB !== undefined ? parseFloat(body.estBalanceRMB) : undefined,
       estBalanceNPR: body.estBalanceNPR !== undefined ? parseFloat(body.estBalanceNPR) : undefined,
-      estBalanceDate: body.estBalanceDate ? new Date(body.estBalanceDate) : undefined,
+      estBalanceDate:
+        body.estBalanceDate !== undefined
+          ? body.estBalanceDate
+            ? new Date(body.estBalanceDate)
+            : null
+          : undefined,
+      estBalanceDateManual: body.estBalanceDate !== undefined ? !!body.estBalanceDate : undefined,
       paidBalanceRMB: body.paidBalanceRMB !== undefined ? parseFloat(body.paidBalanceRMB) : undefined,
       paidBalanceNPR: body.paidBalanceNPR !== undefined ? parseFloat(body.paidBalanceNPR) : undefined,
       balancePaymentStatus: body.balancePaymentStatus || undefined,
@@ -103,6 +116,25 @@ export async function PUT(
       sourceLink: body.sourceLink,
     },
   });
+
+  const affectsEstimates = [
+    "orderDateAD",
+    "vendorId",
+    "printingCostRMB",
+    "chinaFreightCostRMB",
+    "inspectionCostRMB",
+    "estAdvanceDate",
+    "estBalanceDate",
+    "estGoodCompletionDate",
+    "revisedGoodCompletionDate",
+    "actualGoodCompletionDate",
+    "estFactoryShipmentDate",
+    "actualFactoryShipmentDate",
+  ].some((k) => body[k] !== undefined);
+  if (affectsEstimates) {
+    await recalcPoTotals(id);
+    po = (await prisma.purchaseOrder.findUnique({ where: { id } })) ?? po;
+  }
   return NextResponse.json(po);
 }
 

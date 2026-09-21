@@ -241,6 +241,7 @@ model PurchaseOrder {
   estAdvanceRMB    Float @default(0)
   estAdvanceNPR    Float @default(0)
   estAdvanceDate   DateTime?
+  estAdvanceDateManual Boolean @default(false)
   paidAdvanceRMB   Float @default(0)
   paidAdvanceNPR   Float @default(0)
   advancePaymentStatus PaymentStatus @default(PENDING)
@@ -248,6 +249,7 @@ model PurchaseOrder {
   estBalanceRMB    Float @default(0)
   estBalanceNPR    Float @default(0)
   estBalanceDate   DateTime?
+  estBalanceDateManual Boolean @default(false)
   paidBalanceRMB   Float @default(0)
   paidBalanceNPR   Float @default(0)
   balancePaymentStatus PaymentStatus @default(PENDING)

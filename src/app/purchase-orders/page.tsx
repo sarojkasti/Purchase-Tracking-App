@@ -46,7 +46,7 @@ export default async function PurchaseOrdersPage() {
               <th className="px-3 py-2">Order Date</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Units (Ord/Shp/Rcv)</th>
-              <th className="px-3 py-2">PI Amount (RMB)</th>
+              <th className="px-3 py-2">PO Amount (RMB)</th>
               <th className="px-3 py-2">Est. Arrival</th>
             </tr>
           </thead>
@@ -68,7 +68,11 @@ export default async function PurchaseOrdersPage() {
                 <td className="px-3 py-2">
                   {po.unitsOrdered} / {po.unitsShipped} / {po.unitsReceived}
                 </td>
-                <td className="px-3 py-2">{po.piAmountRMB.toLocaleString()}</td>
+                <td className="px-3 py-2">
+                  {(
+                    po.piAmountRMB + po.printingCostRMB + po.chinaFreightCostRMB + po.inspectionCostRMB
+                  ).toLocaleString()}
+                </td>
                 <td className="px-3 py-2">{fmtDate(po.estArrivalDateAD)}</td>
               </tr>
             ))}

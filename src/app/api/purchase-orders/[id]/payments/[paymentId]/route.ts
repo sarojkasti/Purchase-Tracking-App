@@ -1,5 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { syncPaymentRollups } from "@/lib/poTotals";
+
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string; paymentId: string }> }
+) {
+  const { id: poId, paymentId } = await params;
+  const body = await req.json();
+
+  const existing = await prisma.payment.findFirst({ where: { id: paymentId, poId } });
+  if (!existing) return NextResponse.json({ error: "Payment not found" }, { status: 404 });
+
+  const amountRMB = parseFloat(body.amountRMB) || 0;
+  if (amountRMB <= 0) {
+    return NextResponse.json({ error: "Payment amount must be greater than 0" }, { status: 400 });
+  }
+  const exchangeRate = parseFloat(body.exchangeRate) || 0;
+
+  const payment = await prisma.payment.update({
+    where: { id: paymentId },
+    data: {
+      paymentDate: new Date(body.paymentDate),
+      paymentType: body.paymentType,
+      amountRMB,
+      exchangeRate,
+      amountNPR: amountRMB * exchangeRate,
+      notes: body.notes || null,
+    },
+  });
+
+  await syncPaymentRollups(poId);
+
+  return NextResponse.json(payment);
+}
 
 export async function DELETE(
   _req: NextRequest,
@@ -8,34 +42,7 @@ export async function DELETE(
   const { id: poId, paymentId } = await params;
   await prisma.payment.delete({ where: { id: paymentId } });
 
-  const po = await prisma.purchaseOrder.findUnique({ where: { id: poId } });
-  const payments = await prisma.payment.findMany({ where: { poId } });
-  const paidAdvanceRMB = payments
-    .filter((p) => p.paymentType === "ADVANCE")
-    .reduce((s, p) => s + p.amountRMB, 0);
-  const paidAdvanceNPR = payments
-    .filter((p) => p.paymentType === "ADVANCE")
-    .reduce((s, p) => s + p.amountNPR, 0);
-  const paidBalanceRMB = payments
-    .filter((p) => p.paymentType === "BALANCE")
-    .reduce((s, p) => s + p.amountRMB, 0);
-  const paidBalanceNPR = payments
-    .filter((p) => p.paymentType === "BALANCE")
-    .reduce((s, p) => s + p.amountNPR, 0);
-
-  await prisma.purchaseOrder.update({
-    where: { id: poId },
-    data: {
-      paidAdvanceRMB,
-      paidAdvanceNPR,
-      advancePaymentStatus:
-        paidAdvanceRMB <= 0 ? "PENDING" : paidAdvanceRMB < (po?.estAdvanceRMB ?? 0) ? "PARTIAL" : "PAID",
-      paidBalanceRMB,
-      paidBalanceNPR,
-      balancePaymentStatus:
-        paidBalanceRMB <= 0 ? "PENDING" : paidBalanceRMB < (po?.estBalanceRMB ?? 0) ? "PARTIAL" : "PAID",
-    },
-  });
+  await syncPaymentRollups(poId);
 
   return NextResponse.json({ ok: true });
 }
