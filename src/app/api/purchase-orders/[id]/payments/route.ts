@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncPaymentRollups } from "@/lib/poTotals";
+import { syncPaymentRollups, poTotalAmountRMB } from "@/lib/poTotals";
 
 export async function POST(
   req: NextRequest,
@@ -18,6 +18,21 @@ export async function POST(
   }
   const exchangeRate = parseFloat(body.exchangeRate) || 0;
   const amountNPR = body.amountNPR ? parseFloat(body.amountNPR) : amountRMB * exchangeRate;
+
+  const totalRMB = poTotalAmountRMB(po);
+  const existingPaidRMB = await prisma.payment.aggregate({
+    where: { poId },
+    _sum: { amountRMB: true },
+  });
+  const alreadyPaidRMB = existingPaidRMB._sum.amountRMB ?? 0;
+  if (totalRMB > 0 && alreadyPaidRMB + amountRMB > totalRMB) {
+    return NextResponse.json(
+      {
+        error: `Payment of ¥${amountRMB.toLocaleString()} would bring total payments to ¥${(alreadyPaidRMB + amountRMB).toLocaleString()}, which exceeds the PO total of ¥${totalRMB.toLocaleString()}.`,
+      },
+      { status: 400 }
+    );
+  }
 
   const payment = await prisma.payment.create({
     data: {

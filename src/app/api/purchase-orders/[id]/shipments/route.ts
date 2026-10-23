@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { syncShipmentRollups, recordShipmentCreatedEvent } from "@/lib/poTotals";
+
+type ShipmentItemInput = { poItemId: string; shippedQty: string | number };
 
 export async function POST(
   req: NextRequest,
@@ -8,30 +11,37 @@ export async function POST(
   const { id: poId } = await params;
   const body = await req.json();
 
+  const items: ShipmentItemInput[] = Array.isArray(body.items) ? body.items : [];
+  const validItems = items
+    .map((i) => ({ poItemId: i.poItemId, shippedQty: parseInt(String(i.shippedQty)) || 0 }))
+    .filter((i) => i.poItemId && i.shippedQty > 0);
+
+  if (validItems.length === 0) {
+    return NextResponse.json({ error: "At least one item with a shipped quantity is required" }, { status: 400 });
+  }
+
+  const shippedQty = validItems.reduce((s, i) => s + i.shippedQty, 0);
+
+  // A new shipment always starts at SHIPPED with nothing received yet -
+  // customs and receiving are recorded afterward, per shipment, as their
+  // own events (see markShipmentsAtCustom / addReceivingEvent).
   const shipment = await prisma.shipment.create({
     data: {
       poId,
       shippingDate: new Date(body.shippingDate),
       transportMode: body.transportMode || "ROAD",
-      shippedQty: parseInt(body.shippedQty) || 0,
-      receivedQty: body.receivedQty ? parseInt(body.receivedQty) : null,
-      actualCustomArrivalDate: body.actualCustomArrivalDate
-        ? new Date(body.actualCustomArrivalDate)
-        : null,
-      actualCustomDate: body.actualCustomDate ? new Date(body.actualCustomDate) : null,
+      shippedQty,
+      receivedQty: null,
       arrivalDate: body.arrivalDate ? new Date(body.arrivalDate) : null,
-      status: body.status || "SHIPPED",
+      status: "SHIPPED",
       notes: body.notes || null,
+      items: { create: validItems },
     },
+    include: { items: true },
   });
 
-  const shipments = await prisma.shipment.findMany({ where: { poId } });
-  const unitsShipped = shipments.reduce((s, sh) => s + sh.shippedQty, 0);
-  const unitsReceived = shipments.reduce((s, sh) => s + (sh.receivedQty ?? 0), 0);
-  await prisma.purchaseOrder.update({
-    where: { id: poId },
-    data: { unitsShipped, unitsReceived },
-  });
+  await recordShipmentCreatedEvent(poId, shipment.id, shipment.shippingDate);
+  await syncShipmentRollups(poId);
 
   return NextResponse.json(shipment, { status: 201 });
 }

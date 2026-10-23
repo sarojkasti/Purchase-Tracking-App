@@ -1,9 +1,23 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { STAGE_LABELS, shipmentBreakdownLabel, type Stage } from "@/lib/poStages";
+
+function statusLabel(po: { stage: string; onHold: boolean; cancelled: boolean; unitsOrdered: number; shipments: { status: string; shippedQty: number }[] }) {
+  if (po.cancelled) return "Cancelled";
+  if (po.onHold) return "On Hold";
+  const stage = po.stage as Stage;
+  const label = STAGE_LABELS[stage] ?? po.stage;
+  if (!["SHIPPED", "CUSTOM", "RECEIVED"].includes(stage)) return label;
+  return shipmentBreakdownLabel(po.shipments, label, po.unitsOrdered);
+}
 
 export async function GET() {
   const pos = await prisma.purchaseOrder.findMany({
-    include: { vendor: { include: { agent: true } }, items: { select: { brand: true } } },
+    include: {
+      vendor: { include: { agent: true } },
+      items: { select: { brand: true } },
+      shipments: { select: { status: true, shippedQty: true } },
+    },
     orderBy: { orderDateAD: "desc" },
   });
 
@@ -19,7 +33,7 @@ export async function GET() {
     orderDateBS: po.orderDateBS,
     orderMonth: po.orderMonth,
 
-    status: po.status,
+    status: statusLabel(po),
     transportMode: po.transportMode,
     brand: brands.join(", ") || null,
     gender: po.gender,

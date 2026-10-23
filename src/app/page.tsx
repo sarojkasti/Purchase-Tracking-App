@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
+import { STAGE_LABELS, shipmentBreakdownLabel, type Stage } from "@/lib/poStages";
 
 export const dynamic = "force-dynamic";
 
@@ -8,13 +9,22 @@ function fmtDate(d: Date | null) {
   return new Date(d).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+function statusLabel(po: { stage: string; onHold: boolean; cancelled: boolean; unitsOrdered: number; shipments: { status: string; shippedQty: number }[] }) {
+  if (po.cancelled) return "Cancelled";
+  if (po.onHold) return "On Hold";
+  const stage = po.stage as Stage;
+  const label = STAGE_LABELS[stage] ?? po.stage;
+  if (!["SHIPPED", "CUSTOM", "RECEIVED"].includes(stage)) return label;
+  return shipmentBreakdownLabel(po.shipments, label, po.unitsOrdered);
+}
+
 export default async function DashboardPage() {
   const [pos, vendors] = await Promise.all([
-    prisma.purchaseOrder.findMany({ include: { vendor: true } }),
+    prisma.purchaseOrder.findMany({ include: { vendor: true, shipments: { select: { status: true, shippedQty: true } } } }),
     prisma.vendor.count(),
   ]);
 
-  const activePos = pos.filter((p) => p.status !== "RECEIVED" && p.status !== "CANCELLED");
+  const activePos = pos.filter((p) => p.stage !== "RECEIVED" && !p.cancelled);
   const totalUnitsInTransit = activePos.reduce((s, p) => s + (p.unitsShipped - p.unitsReceived), 0);
   const totalPendingAdvanceRMB = pos
     .filter((p) => p.advancePaymentStatus !== "PAID")
@@ -26,7 +36,7 @@ export default async function DashboardPage() {
   const today = new Date();
   const overdue = activePos.filter((p) => {
     const est = p.estArrivalDateAD;
-    return est && new Date(est) < today && p.status !== "RECEIVED";
+    return est && new Date(est) < today && p.stage !== "RECEIVED";
   });
 
   const upcomingArrivals = activePos
@@ -78,7 +88,7 @@ export default async function DashboardPage() {
                   </td>
                   <td className="py-1">{p.vendor.name}</td>
                   <td className="py-1 text-red-600">{fmtDate(p.estArrivalDateAD)}</td>
-                  <td className="py-1">{p.status}</td>
+                  <td className="py-1">{statusLabel(p)}</td>
                 </tr>
               ))}
             </tbody>
@@ -107,7 +117,7 @@ export default async function DashboardPage() {
                 </td>
                 <td className="py-1">{p.vendor.name}</td>
                 <td className="py-1">{fmtDate(p.estArrivalDateAD)}</td>
-                <td className="py-1">{p.status}</td>
+                <td className="py-1">{statusLabel(p)}</td>
               </tr>
             ))}
             {upcomingArrivals.length === 0 && (

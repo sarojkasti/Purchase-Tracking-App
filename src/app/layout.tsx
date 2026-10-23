@@ -25,6 +25,7 @@ const navLinks = [
   { href: "/vendors", label: "Vendors" },
   { href: "/masters", label: "Masters" },
   { href: "/reports", label: "Reports" },
+  { href: "/mrp-calculator", label: "MRP Calculator" },
 ];
 
 export default function RootLayout({

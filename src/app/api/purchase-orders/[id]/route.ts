@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { adToBs } from "@/lib/bsDate";
-import { recalcPoTotals } from "@/lib/poTotals";
+import { recalcPoTotals, recalcOrderStatus } from "@/lib/poTotals";
 
 export async function GET(
   _req: NextRequest,
@@ -14,8 +14,12 @@ export async function GET(
       vendor: true,
       items: true,
       payments: { orderBy: { paymentDate: "asc" } },
-      shipments: { orderBy: { shippingDate: "asc" } },
+      shipments: {
+        orderBy: { shippingDate: "asc" },
+        include: { items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } } },
+      },
       attachments: { orderBy: { uploadedAt: "desc" } },
+      stageEvents: { orderBy: { actualDate: "asc" } },
     },
   });
   if (!po) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -31,6 +35,12 @@ export async function PUT(
 
   const orderDateAD = body.orderDateAD ? new Date(body.orderDateAD) : undefined;
 
+  // Hold/cancelled are independent flags layered on top of the pipeline
+  // stage (see poStages.ts); clearing either resumes at the same stage
+  // instead of losing the PO's position.
+  const onHold = typeof body.onHold === "boolean" ? body.onHold : undefined;
+  const cancelled = typeof body.cancelled === "boolean" ? body.cancelled : undefined;
+
   let po = await prisma.purchaseOrder.update({
     where: { id },
     data: {
@@ -39,7 +49,8 @@ export async function PUT(
       vendorId: body.vendorId,
       orderDateAD,
       orderDateBS: orderDateAD ? adToBs(orderDateAD) : undefined,
-      status: body.status,
+      onHold,
+      cancelled,
       transportMode: body.transportMode,
       gender: body.gender !== undefined ? body.gender || null : undefined,
       unitsOrdered: body.unitsOrdered !== undefined ? parseInt(body.unitsOrdered) : undefined,
@@ -133,6 +144,11 @@ export async function PUT(
   ].some((k) => body[k] !== undefined);
   if (affectsEstimates) {
     await recalcPoTotals(id);
+    po = (await prisma.purchaseOrder.findUnique({ where: { id } })) ?? po;
+  } else if (onHold === false || cancelled === false) {
+    // Coming off hold/cancelled: re-derive the automatic stages in case
+    // shipment/receiving data moved on while the PO was paused.
+    await recalcOrderStatus(id);
     po = (await prisma.purchaseOrder.findUnique({ where: { id } })) ?? po;
   }
   return NextResponse.json(po);

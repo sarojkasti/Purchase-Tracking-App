@@ -7,12 +7,12 @@ import { recalcPoTotals } from "@/lib/poTotals";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const vendorId = searchParams.get("vendorId") || undefined;
-  const status = searchParams.get("status") || undefined;
+  const stage = searchParams.get("stage") || undefined;
 
   const pos = await prisma.purchaseOrder.findMany({
     where: {
       vendorId: vendorId || undefined,
-      status: (status as never) || undefined,
+      stage: (stage as never) || undefined,
     },
     include: { vendor: true, _count: { select: { items: true } } },
     orderBy: { orderDateAD: "desc" },
@@ -72,7 +72,6 @@ export async function POST(req: NextRequest) {
       vendorId: body.vendorId,
       orderDateAD,
       orderDateBS,
-      status: body.status || "DRAFT",
       transportMode: body.transportMode || "ROAD",
       gender: body.gender || null,
       unitsOrdered: unitsOrderedFromItems || parseInt(body.unitsOrdered) || 0,

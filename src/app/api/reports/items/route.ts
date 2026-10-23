@@ -2,6 +2,16 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getApplicableForexRate } from "@/lib/forexRate";
 import { getApplicableFreightRates } from "@/lib/vendorPolicy";
+import { STAGE_LABELS, shipmentBreakdownLabel, type Stage } from "@/lib/poStages";
+
+function statusLabel(po: { stage: string; onHold: boolean; cancelled: boolean; unitsOrdered: number; shipments: { status: string; shippedQty: number }[] }) {
+  if (po.cancelled) return "Cancelled";
+  if (po.onHold) return "On Hold";
+  const stage = po.stage as Stage;
+  const label = STAGE_LABELS[stage] ?? po.stage;
+  if (!["SHIPPED", "CUSTOM", "RECEIVED"].includes(stage)) return label;
+  return shipmentBreakdownLabel(po.shipments, label, po.unitsOrdered);
+}
 
 export async function GET() {
   const items = await prisma.pOItem.findMany({
@@ -10,6 +20,7 @@ export async function GET() {
         include: {
           vendor: { include: { agent: true } },
           items: { select: { unitsOrdered: true } },
+          shipments: { select: { status: true, shippedQty: true } },
         },
       },
     },
@@ -70,7 +81,7 @@ export async function GET() {
         agent: po.vendor.agent?.name ?? null,
         orderDateAD: po.orderDateAD,
         orderDateBS: po.orderDateBS,
-        status: po.status,
+        status: statusLabel(po),
         transportMode: po.transportMode,
 
         chineseSku: item.chineseSku,

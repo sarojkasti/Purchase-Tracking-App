@@ -185,15 +185,24 @@ model Product {
 
 // ---------- Purchase Orders ----------
 
-enum OrderStatus {
-  DRAFT
-  CONFIRMED
-  IN_PRODUCTION
+// The PO's position in its production/shipping pipeline. Two sequences share
+// this enum depending on the PO's mfgType (see poStages.ts): PRODUCTION POs
+// use START_PRODUCTION, READY_GOODS POs use PRINTING_PROCESS; both then share
+// GOODS_COMPLETED -> QC -> READY_TO_SHIP -> SHIPPED -> CUSTOM -> RECEIVED.
+// SHIPPED/CUSTOM/RECEIVED are automatic (from shipment/receiving data); every
+// earlier step is a manual, strictly-sequential advance. HOLD and CANCELLED
+// (on the separate PurchaseOrder.onHold/cancelled flags) override the stage
+// display without losing the underlying position.
+enum OrderStage {
+  ORDER_PLACED
+  START_PRODUCTION
+  PRINTING_PROCESS
+  GOODS_COMPLETED
   QC
+  READY_TO_SHIP
   SHIPPED
-  AT_CUSTOM
+  CUSTOM
   RECEIVED
-  CANCELLED
 }
 
 enum MfgType {
@@ -224,7 +233,9 @@ model PurchaseOrder {
   orderDateBS String?
   orderMonth  String? // Nepali month, denormalized for quick filtering
 
-  status        OrderStatus @default(DRAFT)
+  stage         OrderStage @default(ORDER_PLACED)
+  onHold        Boolean    @default(false)
+  cancelled     Boolean    @default(false)
   transportMode TransportMode @default(ROAD)
 
   gender  String?
@@ -292,6 +303,35 @@ model PurchaseOrder {
   payments    Payment[]
   shipments   Shipment[]
   attachments POAttachment[]
+  stageEvents StageEvent[]
+}
+
+// Records the actual date each pipeline stage was reached, for the PO's own
+// manual stages (Order Placed through Ready to Ship) and, separately, for
+// each shipment's own Shipped/At Custom/Received progress (shipmentId set).
+// One row per (po or shipment, stage) - re-advancing to a stage never
+// happens in this pipeline, so this doubles as the history log itself.
+// Compared against whichever existing estimate field maps to that stage
+// (see stageEstimateField in poStages.ts) - most manual stages have no
+// estimate field yet and just show the actual date on its own.
+model StageEvent {
+  id         String    @id @default(cuid())
+  poId       String
+  po         PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  shipmentId String?
+  shipment   Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  stage      String
+  actualDate DateTime
+
+  createdAt DateTime @default(now())
+
+  // A PO-level stage event has shipmentId null; a shipment-level one has it
+  // set. Uniqueness is enforced in application code (upsert-by-lookup)
+  // rather than a DB constraint, since Postgres treats multiple NULLs as
+  // distinct and can't uniquely constrain the PO-level rows this way.
+  @@index([poId, stage])
+  @@index([shipmentId, stage])
 }
 
 enum POAttachmentType {
@@ -356,6 +396,8 @@ model POItem {
   estArrivalDate DateTime?
   goodsStatus    String?
 
+  shipmentLines ShipmentItem[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -392,11 +434,15 @@ model Payment {
   createdAt DateTime @default(now())
 }
 
+// A single shipment's own pipeline position, independent of every other
+// shipment on the same PO - different packing lists reach customs and
+// arrive on different days. SHIPPED is the default; AT_CUSTOM is set by
+// hand (picking which shipment(s) reached customs from the PO's "Mark:
+// Custom" action); RECEIVED is derived once every item line is fully
+// received or the shipment is confirmed complete despite a shortfall.
 enum ShippingStatus {
-  PENDING
   SHIPPED
   AT_CUSTOM
-  CLEARED
   RECEIVED
 }
 
@@ -416,6 +462,52 @@ model Shipment {
 
   status ShippingStatus @default(SHIPPED)
   notes  String?
+
+  // Set when the user confirms, on a receivedQty < shippedQty mismatch
+  // popup, that this packing list is fully received as entered (a real
+  // shortage, not a partial receipt still in progress). Once set, this
+  // shipment counts as complete for PO stage purposes even though its raw
+  // quantities don't match.
+  receivingConfirmed Boolean @default(false)
+
+  items       ShipmentItem[]
+  stageEvents StageEvent[]
+
+  createdAt DateTime @default(now())
+}
+
+// One packing-list line within a Shipment: the quantity of a specific PO
+// item actually shipped in that batch. A PI's goods may go out across
+// several shipments and the per-shipment qty can differ from the PO's
+// ordered qty, so this is tracked per shipment rather than assumed 1:1.
+// receivedQty is a rollup of this line's ReceivingEvents, kept denormalized
+// for quick display/rollups the same way PurchaseOrder mirrors POItem sums.
+model ShipmentItem {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  poItemId   String
+  poItem     POItem   @relation(fields: [poItemId], references: [id], onDelete: Cascade)
+
+  shippedQty  Int
+  receivedQty Int @default(0)
+
+  receivingEvents ReceivingEvent[]
+
+  createdAt DateTime @default(now())
+}
+
+// One delivery event against a shipment line - goods for the same packing
+// list can arrive in multiple batches on different days, each logged
+// separately rather than overwriting a single receivedQty field.
+model ReceivingEvent {
+  id             String       @id @default(cuid())
+  shipmentItemId String
+  shipmentItem   ShipmentItem @relation(fields: [shipmentItemId], references: [id], onDelete: Cascade)
+
+  receivedDate DateTime
+  receivedQty  Int
+  notes        String?
 
   createdAt DateTime @default(now())
 }

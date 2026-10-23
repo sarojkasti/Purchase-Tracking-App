@@ -26,8 +26,12 @@ export default async function PODetailPage({
           vendor: true,
           items: { orderBy: { createdAt: "asc" } },
           payments: { orderBy: { paymentDate: "asc" } },
-          shipments: { orderBy: { shippingDate: "asc" } },
+          shipments: {
+            orderBy: { shippingDate: "asc" },
+            include: { items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } } },
+          },
           attachments: { orderBy: { uploadedAt: "desc" } },
+          stageEvents: { orderBy: { actualDate: "asc" } },
         },
       }),
       getMasterNames("ITEM_TYPE"),
