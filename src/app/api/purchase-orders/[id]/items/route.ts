@@ -4,6 +4,20 @@ import { upsertProductFromItem } from "@/lib/productUpsert";
 import { recalcPoTotals } from "@/lib/poTotals";
 import { buildPOItemData } from "@/lib/poItemData";
 
+async function detectOrderType(newmewSku: string | null, chineseSku: string | null, excludeItemId?: string): Promise<string> {
+  if (!newmewSku && !chineseSku) return "New Order";
+  const existing = await prisma.pOItem.findFirst({
+    where: {
+      ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
+      OR: [
+        newmewSku ? { newmewSku } : {},
+        chineseSku ? { chineseSku } : {},
+      ].filter((c) => Object.keys(c).length > 0),
+    },
+  });
+  return existing ? "Reorder" : "New Order";
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -11,8 +25,13 @@ export async function POST(
   const { id: poId } = await params;
   const body = await req.json();
 
+  const data = buildPOItemData(body);
+  if (!data.orderType) {
+    data.orderType = await detectOrderType(data.newmewSku ?? null, data.chineseSku ?? null);
+  }
+
   const item = await prisma.pOItem.create({
-    data: { ...buildPOItemData(body), poId },
+    data: { ...data, poId },
   });
 
   await upsertProductFromItem({

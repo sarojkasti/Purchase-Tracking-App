@@ -20,7 +20,7 @@ model Agent {
 
   vendors        Vendor[]
   freightRatePolicies AgentFreightRatePolicy[]
-  forexRates     ForexRate[]
+  purchaseOrders PurchaseOrder[]
 }
 
 // Versioned freight/cost rate by item category & transport mode, owned by the Agent
@@ -74,19 +74,6 @@ model VendorPaymentPolicy {
   @@unique([vendorId, effectiveFrom])
 }
 
-// Agent-scoped RMB -> NPR conversion rate: agents settle payments at different
-// rates on the same day, so the rate is looked up by (agent, date) rather than
-// a single global rate.
-model ForexRate {
-  id        String   @id @default(cuid())
-  agentId   String
-  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  date      DateTime
-  rate      Float // RMB -> NPR conversion rate
-  createdAt DateTime @default(now())
-
-  @@unique([agentId, date])
-}
 
 // AD <-> BS calendar mapping, mirrors "Date Master" sheet
 model DateMaster {
@@ -109,12 +96,10 @@ enum MasterType {
   ITEM_TYPE
   GENDER
   MFG_TYPE
-  PRODUCTION_STATUS
   FRONT_MATERIAL
   TEMPLE_MATERIAL
   LENS_MATERIAL
-  SHIPPING_METHOD
-  SHIPPING_STATUS_STAGE
+  CUSTOM_POINT
 }
 
 model SimpleMaster {
@@ -213,6 +198,7 @@ enum MfgType {
 enum TransportMode {
   ROAD
   AIRWAY
+  SEA
 }
 
 enum PaymentStatus {
@@ -228,6 +214,9 @@ model PurchaseOrder {
 
   vendorId    String
   vendor      Vendor   @relation(fields: [vendorId], references: [id])
+
+  agentId     String?
+  agent       Agent?   @relation(fields: [agentId], references: [id])
 
   orderDateAD DateTime
   orderDateBS String?
@@ -299,11 +288,13 @@ model PurchaseOrder {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  items       POItem[]
-  payments    Payment[]
-  shipments   Shipment[]
-  attachments POAttachment[]
-  stageEvents StageEvent[]
+  items          POItem[]
+  payments       Payment[]
+  shipments      Shipment[]
+  attachments    POAttachment[]
+  stageEvents    StageEvent[]
+  poNotes        PONote[]
+  dateRevisions  PODateRevision[]
 }
 
 // Records the actual date each pipeline stage was reached, for the PO's own
@@ -431,18 +422,66 @@ model Payment {
 
   notes String?
 
+  advices PaymentAdvice[]
+
   createdAt DateTime @default(now())
+}
+
+model PaymentAdvice {
+  id          String   @id @default(cuid())
+  paymentId   String
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  fileName    String
+  url         String
+  mimeType    String
+  fileSize    Int
+  uploadedAt  DateTime @default(now())
+}
+
+model PONote {
+  id        String        @id @default(cuid())
+  poId      String
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime      @default(now())
+}
+
+// Audit log for estimate date revisions — recorded whenever recalcPoTotals
+// updates an estimate because an upstream actual date was set.
+model PODateRevision {
+  id        String        @id @default(cuid())
+  poId      String
+  po        PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  field     String        // e.g. "estFactoryShipmentDate"
+  label     String        // human-readable, e.g. "Est. Factory Shipment"
+  fromDate  DateTime?
+  toDate    DateTime?
+  reason    String        // e.g. "Actual goods completion set"
+  createdAt DateTime      @default(now())
+}
+
+model ShipmentAttachment {
+  id         String   @id @default(cuid())
+  shipmentId String
+  shipment   Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  fileName   String
+  url        String
+  mimeType   String
+  fileSize   Int
+  uploadedAt DateTime @default(now())
 }
 
 // A single shipment's own pipeline position, independent of every other
 // shipment on the same PO - different packing lists reach customs and
 // arrive on different days. SHIPPED is the default; AT_CUSTOM is set by
 // hand (picking which shipment(s) reached customs from the PO's "Mark:
-// Custom" action); RECEIVED is derived once every item line is fully
+// Custom Arrival" action); AT_CUSTOM_CLEARANCE is set by the "Mark: Custom
+// Clearance" action; RECEIVED is derived once every item line is fully
 // received or the shipment is confirmed complete despite a shortfall.
 enum ShippingStatus {
   SHIPPED
   AT_CUSTOM
+  AT_CUSTOM_CLEARANCE
   RECEIVED
 }
 
@@ -456,12 +495,16 @@ model Shipment {
   shippedQty        Int
   receivedQty       Int?
 
+  estCustomArrivalDate    DateTime?
   actualCustomArrivalDate DateTime?
+  estCustomClearanceDate  DateTime?
   actualCustomDate        DateTime?
+  estArrivalDate          DateTime?
   arrivalDate             DateTime?
 
-  status ShippingStatus @default(SHIPPED)
-  notes  String?
+  status      ShippingStatus @default(SHIPPED)
+  customPoint String?
+  notes       String?
 
   // Set when the user confirms, on a receivedQty < shippedQty mismatch
   // popup, that this packing list is fully received as entered (a real
@@ -470,8 +513,9 @@ model Shipment {
   // quantities don't match.
   receivingConfirmed Boolean @default(false)
 
-  items       ShipmentItem[]
-  stageEvents StageEvent[]
+  items        ShipmentItem[]
+  stageEvents  StageEvent[]
+  attachments  ShipmentAttachment[]
 
   createdAt DateTime @default(now())
 }
@@ -491,6 +535,7 @@ model ShipmentItem {
 
   shippedQty  Int
   receivedQty Int @default(0)
+  actualCustomRateNPR Float?
 
   receivingEvents ReceivingEvent[]
 

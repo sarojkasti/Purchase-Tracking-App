@@ -18,28 +18,37 @@ export default async function PODetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [po, itemTypes, brands, frontMaterials, templeMaterials, lensMaterials, colors] =
+  const [po, itemTypes, brands, genders, frontMaterials, templeMaterials, lensMaterials, colors, customPoints, agents] =
     await Promise.all([
       prisma.purchaseOrder.findUnique({
         where: { id },
         include: {
-          vendor: true,
+          vendor: { include: { agent: true } },
+          agent: true,
           items: { orderBy: { createdAt: "asc" } },
-          payments: { orderBy: { paymentDate: "asc" } },
+          payments: { orderBy: { paymentDate: "asc" }, include: { advices: { orderBy: { uploadedAt: "asc" } } } },
           shipments: {
             orderBy: { shippingDate: "asc" },
-            include: { items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } } },
+            include: {
+              items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } },
+              attachments: { orderBy: { uploadedAt: "asc" } },
+            },
           },
           attachments: { orderBy: { uploadedAt: "desc" } },
           stageEvents: { orderBy: { actualDate: "asc" } },
+          poNotes: { orderBy: { createdAt: "desc" } },
+          dateRevisions: { orderBy: { createdAt: "asc" } },
         },
       }),
       getMasterNames("ITEM_TYPE"),
       getMasterNames("BRAND"),
+      getMasterNames("GENDER"),
       getMasterNames("FRONT_MATERIAL"),
       getMasterNames("TEMPLE_MATERIAL"),
       getMasterNames("LENS_MATERIAL"),
       prisma.color.findMany({ orderBy: { sortOrder: "asc" } }),
+      getMasterNames("CUSTOM_POINT"),
+      prisma.agent.findMany({ orderBy: { name: "asc" } }),
     ]);
   if (!po) notFound();
 
@@ -48,10 +57,13 @@ export default async function PODetailPage({
       po={JSON.parse(JSON.stringify(po))}
       itemTypes={itemTypes}
       brands={brands}
+      genders={genders}
       frontMaterials={frontMaterials}
       templeMaterials={templeMaterials}
       lensMaterials={lensMaterials}
       colors={JSON.parse(JSON.stringify(colors))}
+      customPoints={customPoints}
+      agents={JSON.parse(JSON.stringify(agents))}
     />
   );
 }

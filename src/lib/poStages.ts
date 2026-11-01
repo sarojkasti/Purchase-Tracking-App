@@ -50,7 +50,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   QC: "QC",
   READY_TO_SHIP: "Ready to Ship",
   SHIPPED: "Shipped",
-  CUSTOM: "Custom",
+  CUSTOM: "Custom Arrival",
   RECEIVED: "Received",
 };
 
@@ -123,11 +123,12 @@ export const STAGE_ESTIMATE_FIELD: Partial<Record<Stage, string>> = {
   RECEIVED: "estArrivalDateAD",
 };
 
-const SHIPMENT_STAGE_ORDER = ["NOT_SHIPPED", "SHIPPED", "AT_CUSTOM", "RECEIVED"] as const;
+const SHIPMENT_STAGE_ORDER = ["NOT_SHIPPED", "SHIPPED", "AT_CUSTOM", "AT_CUSTOM_CLEARANCE", "RECEIVED"] as const;
 const SHIPMENT_STAGE_LABELS: Record<(typeof SHIPMENT_STAGE_ORDER)[number], string> = {
   NOT_SHIPPED: "Ready to Ship",
   SHIPPED: "Shipped",
-  AT_CUSTOM: "At Custom",
+  AT_CUSTOM: "At Custom Arrival",
+  AT_CUSTOM_CLEARANCE: "Custom Clearance",
   RECEIVED: "Received",
 };
 

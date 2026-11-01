@@ -23,6 +23,15 @@ export default function ReportsIndexPage() {
             Every PO line item, one row each, with PO context flattened in.
           </div>
         </Link>
+        <Link
+          href="/reports/sku-history"
+          className="block bg-white border rounded p-4 hover:border-gray-400"
+        >
+          <div className="font-medium">SKU History</div>
+          <div className="text-sm text-gray-500 mt-1">
+            Search by Chinese SKU, Newmew SKU, or product name — view full PO history.
+          </div>
+        </Link>
       </div>
     </div>
   );

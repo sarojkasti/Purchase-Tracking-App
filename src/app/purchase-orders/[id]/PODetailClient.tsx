@@ -27,10 +27,12 @@ type Item = {
   id: string;
   chineseSku: string | null;
   newmewSku: string | null;
+  orderType: string | null;
   specificName: string | null;
   itemType: string | null;
   mfgType: string | null;
   brand: string | null;
+  gender: string | null;
   category: string | null;
   colors: string[];
   size: string | null;
@@ -47,6 +49,19 @@ type Item = {
   imageUrl: string | null;
 };
 
+type PaymentAdvice = {
+  id: string;
+  fileName: string;
+  url: string;
+  mimeType: string;
+};
+
+type PONote = {
+  id: string;
+  content: string;
+  createdAt: string;
+};
+
 type Payment = {
   id: string;
   paymentDate: string;
@@ -55,6 +70,7 @@ type Payment = {
   exchangeRate: number;
   amountNPR: number;
   notes: string | null;
+  advices: PaymentAdvice[];
 };
 
 type ReceivingEvent = {
@@ -69,7 +85,15 @@ type ShipmentItem = {
   poItemId: string;
   shippedQty: number;
   receivedQty: number;
+  actualCustomRateNPR: number | null;
   receivingEvents: ReceivingEvent[];
+};
+
+type ShipmentAttachment = {
+  id: string;
+  fileName: string;
+  url: string;
+  mimeType: string;
 };
 
 type Shipment = {
@@ -80,9 +104,16 @@ type Shipment = {
   receivedQty: number | null;
   arrivalDate: string | null;
   status: string;
+  customPoint: string | null;
   notes: string | null;
   receivingConfirmed: boolean;
   items: ShipmentItem[];
+  attachments: ShipmentAttachment[];
+  estCustomArrivalDate: string | null;
+  actualCustomArrivalDate: string | null;
+  estCustomClearanceDate: string | null;
+  actualCustomDate: string | null;
+  estArrivalDate: string | null;
 };
 
 type Attachment = {
@@ -99,7 +130,9 @@ type PO = {
   id: string;
   poNumber: string;
   piNumber: string | null;
-  vendor: { id: string; name: string; shortName: string; agentId: string | null };
+  vendor: { id: string; name: string; shortName: string; agentId: string | null; agent: { id: string; name: string } | null };
+  agentId: string | null;
+  agent: { id: string; name: string } | null;
   orderDateAD: string;
   orderDateBS: string | null;
   stage: string;
@@ -136,13 +169,27 @@ type PO = {
   actualCustomDate: string | null;
   estArrivalDateAD: string | null;
   estArrivalDateBS: string | null;
+  estArrivalWeek: string | null;
   actualArrivalDateAD: string | null;
+  actualArrivalWeek: string | null;
   remarks: string | null;
   items: Item[];
   payments: Payment[];
   shipments: Shipment[];
   attachments: Attachment[];
   stageEvents: StageEventRecord[];
+  poNotes: PONote[];
+  dateRevisions: DateRevision[];
+};
+
+type DateRevision = {
+  id: string;
+  field: string;
+  label: string;
+  fromDate: string | null;
+  toDate: string | null;
+  reason: string;
+  createdAt: string;
 };
 
 type StageEventRecord = {
@@ -196,22 +243,28 @@ export default function PODetailClient({
   po: initialPo,
   itemTypes,
   brands,
+  genders,
   frontMaterials,
   templeMaterials,
   lensMaterials,
   colors,
+  customPoints,
+  agents,
 }: {
   po: PO;
   itemTypes: string[];
   brands: string[];
+  genders: string[];
   frontMaterials: string[];
   templeMaterials: string[];
   lensMaterials: string[];
   colors: Color[];
+  customPoints: string[];
+  agents: { id: string; name: string }[];
 }) {
   const router = useRouter();
   const [po, setPo] = useState(initialPo);
-  const [tab, setTab] = useState<"overview" | "items" | "payments" | "ledger" | "shipping" | "history" | "attachments">("overview");
+  const [tab, setTab] = useState<"overview" | "items" | "payments" | "ledger" | "shipping" | "history" | "attachments" | "notes">("overview");
   const [saving, setSaving] = useState(false);
 
   async function refresh() {
@@ -272,6 +325,17 @@ export default function PODetailClient({
   const priorStage = isShipmentDriven ? null : previousStage(po.stage as Stage, mfgType);
   const paused = po.onHold || po.cancelled;
   const [showCustomPicker, setShowCustomPicker] = useState(false);
+  const [showClearancePicker, setShowClearancePicker] = useState(false);
+  const [showReceivingModal, setShowReceivingModal] = useState(false);
+  const hasClearancePending = po.shipments.some((s) => s.status === "AT_CUSTOM");
+  const hasReceivable = po.shipments.some((s) => {
+    if (s.status === "AT_CUSTOM_CLEARANCE") return true;
+    if (s.status === "RECEIVED" && !s.receivingConfirmed) {
+      const fullyReceived = s.items.every((line) => line.receivedQty >= line.shippedQty);
+      return !fullyReceived;
+    }
+    return false;
+  });
   const [showAdvancePopover, setShowAdvancePopover] = useState(false);
   const [advanceDate, setAdvanceDate] = useState(new Date().toISOString().slice(0, 10));
 
@@ -333,6 +397,11 @@ export default function PODetailClient({
           >
             {po.cancelled ? "Cancelled" : po.onHold ? "On Hold" : stageLabel(po)}
           </span>
+          {!paused && po.shipments.some((s) => s.status === "AT_CUSTOM_CLEARANCE") && (
+            <span className="px-2.5 py-1 rounded text-xs font-medium bg-yellow-50 text-yellow-700 ring-1 ring-inset ring-yellow-200">
+              Pending Receipt
+            </span>
+          )}
           {!paused && priorStage && (
             <button
               onClick={handleRollbackStage}
@@ -396,6 +465,24 @@ export default function PODetailClient({
               Mark: {STAGE_LABELS[pickerStage]}
             </button>
           )}
+          {!paused && hasClearancePending && (
+            <button
+              onClick={() => setShowClearancePicker(true)}
+              disabled={saving}
+              className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700 disabled:opacity-50"
+            >
+              Mark: Custom Clearance
+            </button>
+          )}
+          {!paused && hasReceivable && (
+            <button
+              onClick={() => setShowReceivingModal(true)}
+              disabled={saving}
+              className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700 disabled:opacity-50"
+            >
+              Update Receiving
+            </button>
+          )}
           <button onClick={handleToggleHold} disabled={saving || po.cancelled} className="text-sm text-amber-700 hover:underline disabled:opacity-50">
             {po.onHold ? "Resume" : "Put on Hold"}
           </button>
@@ -418,9 +505,29 @@ export default function PODetailClient({
           }}
         />
       )}
+      {showClearancePicker && (
+        <ClearancePickerModal
+          po={po}
+          onClose={() => setShowClearancePicker(false)}
+          onDone={async () => {
+            setShowClearancePicker(false);
+            await refresh();
+          }}
+        />
+      )}
+      {showReceivingModal && (
+        <ReceivingModal
+          po={po}
+          onClose={() => setShowReceivingModal(false)}
+          onDone={async () => {
+            setShowReceivingModal(false);
+            await refresh();
+          }}
+        />
+      )}
 
       <div className="flex gap-1 border-b mb-4">
-        {(["overview", "items", "payments", "ledger", "shipping", "history", "attachments"] as const).map((t) => (
+        {(["overview", "items", "payments", "ledger", "shipping", "history", "attachments", "notes"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -432,11 +539,12 @@ export default function PODetailClient({
             {t === "payments" && `(${po.payments.length})`}
             {t === "shipping" && `(${po.shipments.length})`}
             {t === "attachments" && `(${po.attachments.length})`}
+            {t === "notes" && po.poNotes.length > 0 && `(${po.poNotes.length})`}
           </button>
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab po={po} onUpdate={updatePO} />}
+      {tab === "overview" && <OverviewTab po={po} onUpdate={updatePO} agents={agents} />}
       {tab === "history" && <HistoryTab po={po} onRefresh={refresh} />}
       {tab === "items" && (
         <ItemsTab
@@ -444,6 +552,7 @@ export default function PODetailClient({
           onRefresh={refresh}
           itemTypes={itemTypes}
           brands={brands}
+          genders={genders}
           frontMaterials={frontMaterials}
           templeMaterials={templeMaterials}
           lensMaterials={lensMaterials}
@@ -452,8 +561,9 @@ export default function PODetailClient({
       )}
       {tab === "payments" && <PaymentsTab po={po} onRefresh={refresh} />}
       {tab === "ledger" && <LedgerTab po={po} />}
-      {tab === "shipping" && <ShippingTab po={po} onRefresh={refresh} />}
+      {tab === "shipping" && <ShippingTab po={po} onRefresh={refresh} customPoints={customPoints} />}
       {tab === "attachments" && <AttachmentsTab po={po} onRefresh={refresh} />}
+      {tab === "notes" && <NotesTab po={po} onRefresh={refresh} />}
 
       <style jsx global>{`
         .field-invalid .input {
@@ -494,9 +604,11 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
 function OverviewTab({
   po,
   onUpdate,
+  agents,
 }: {
   po: PO;
   onUpdate: (patch: Record<string, unknown>) => Promise<void>;
+  agents: { id: string; name: string }[];
 }) {
   const [dates, setDates] = useState({
     estGoodCompletionDate: toInputDate(po.estGoodCompletionDate),
@@ -506,31 +618,51 @@ function OverviewTab({
     estCustomArrivalDate: toInputDate(po.estCustomArrivalDate),
     actualCustomDate: toInputDate(po.actualCustomDate),
     estArrivalDateAD: toInputDate(po.estArrivalDateAD),
+    estArrivalWeek: po.estArrivalWeek ?? "",
     actualArrivalDateAD: toInputDate(po.actualArrivalDateAD),
+    actualArrivalWeek: po.actualArrivalWeek ?? "",
   });
 
   const advancePaidTotalRMB = po.payments
     .filter((p) => p.paymentType === "ADVANCE")
     .reduce((s, p) => s + p.amountRMB, 0);
+  const advancePaidTotalNPR = po.payments
+    .filter((p) => p.paymentType === "ADVANCE")
+    .reduce((s, p) => s + p.amountNPR, 0);
+  const balancePaidTotalRMB = po.payments
+    .filter((p) => p.paymentType === "BALANCE")
+    .reduce((s, p) => s + p.amountRMB, 0);
+  const balancePaidTotalNPR = po.payments
+    .filter((p) => p.paymentType === "BALANCE")
+    .reduce((s, p) => s + p.amountNPR, 0);
   const advanceCarriedRMB =
-    po.estAdvanceRMB > 0 ? Math.round(Math.max(advancePaidTotalRMB - po.estAdvanceRMB, 0) * 100) / 100 : 0;
+    Math.round(Math.max(advancePaidTotalRMB - po.estAdvanceRMB, 0) * 100) / 100;
+  const advanceCarriedNPR =
+    advancePaidTotalRMB > 0 ? Math.round((advancePaidTotalNPR * advanceCarriedRMB / advancePaidTotalRMB) * 100) / 100 : 0;
+  const effectivePaidAdvanceRMB = advancePaidTotalRMB - advanceCarriedRMB;
+  const effectivePaidAdvanceNPR = advancePaidTotalNPR - advanceCarriedNPR;
+  const effectivePaidBalanceRMB = balancePaidTotalRMB + advanceCarriedRMB;
+  const effectivePaidBalanceNPR = balancePaidTotalNPR + advanceCarriedNPR;
 
   const extraCostsRMB = po.printingCostRMB + po.chinaFreightCostRMB + po.inspectionCostRMB;
   const totalPOAmountRMB = po.piAmountRMB + extraCostsRMB;
   const convRate = po.piAmountRMB ? po.piAmountNPR / po.piAmountRMB : 0;
   const totalPOAmountNPR = po.piAmountNPR + extraCostsRMB * convRate;
 
+  const effectiveAgentId = po.agentId ?? po.vendor.agentId;
   const [details, setDetails] = useState({
     piNumber: po.piNumber ?? "",
     orderDateAD: toInputDate(po.orderDateAD),
     transportMode: po.transportMode,
+    agentId: po.agentId ?? "",
   });
   const [detailsSaving, setDetailsSaving] = useState(false);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const detailsChanged =
     details.piNumber !== (po.piNumber ?? "") ||
     details.orderDateAD !== toInputDate(po.orderDateAD) ||
-    details.transportMode !== po.transportMode;
+    details.transportMode !== po.transportMode ||
+    details.agentId !== (po.agentId ?? "");
 
   async function saveDetails() {
     if (!details.piNumber.trim() || !details.orderDateAD) {
@@ -544,6 +676,7 @@ function OverviewTab({
         piNumber: details.piNumber.trim(),
         orderDateAD: details.orderDateAD,
         transportMode: details.transportMode,
+        agentId: details.agentId || null,
       });
     } catch {
       setDetailsError("Failed to save PO details.");
@@ -566,8 +699,8 @@ function OverviewTab({
         <StatCard label="Units Received" value={po.unitsReceived.toLocaleString()} />
         <StatCard
           label="PO Amount"
-          value={`¥${totalPOAmountRMB.toLocaleString()}`}
-          sub={`NPR ${totalPOAmountNPR.toLocaleString()}`}
+          value={`¥${totalPOAmountRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+          sub={`NPR ${totalPOAmountNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
         />
       </div>
 
@@ -604,7 +737,7 @@ function OverviewTab({
 
       <div className="bg-white border rounded p-4">
         <h3 className="text-sm font-medium mb-3">PO Details</h3>
-        <div className="grid grid-cols-4 gap-4 items-end">
+        <div className="grid grid-cols-5 gap-4 items-end">
           <label className="block">
             <span className="block text-xs text-gray-500 mb-1">CHN PI No</span>
             <input
@@ -631,6 +764,25 @@ function OverviewTab({
             >
               <option value="ROAD">Road</option>
               <option value="AIRWAY">Airway</option>
+              <option value="SEA">Sea / Waterway</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-xs text-gray-500 mb-1">
+              Agent
+              {effectiveAgentId && !details.agentId && (
+                <span className="ml-1 text-gray-400">(from vendor)</span>
+              )}
+            </span>
+            <select
+              className="input"
+              value={details.agentId}
+              onChange={(e) => setDetails({ ...details, agentId: e.target.value })}
+            >
+              <option value="">— use vendor default —</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
             </select>
           </label>
           <div className="flex items-center gap-3">
@@ -650,7 +802,7 @@ function OverviewTab({
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-white border rounded p-4">
           <h3 className="text-sm font-medium mb-3">Advance Payment</h3>
-          <Row label="Estimated" value={`¥${po.estAdvanceRMB.toLocaleString()} / NPR ${po.estAdvanceNPR.toLocaleString()}`} />
+          <Row label="Estimated" value={`¥${po.estAdvanceRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / NPR ${po.estAdvanceNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           <Row
             label="Est. Date"
             value={
@@ -662,7 +814,7 @@ function OverviewTab({
               />
             }
           />
-          <Row label="Paid" value={`¥${po.paidAdvanceRMB.toLocaleString()} / NPR ${po.paidAdvanceNPR.toLocaleString()}`} />
+          <Row label="Paid" value={`¥${effectivePaidAdvanceRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / NPR ${effectivePaidAdvanceNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           <Row
             label="Status"
             value={
@@ -682,7 +834,7 @@ function OverviewTab({
         </div>
         <div className="bg-white border rounded p-4">
           <h3 className="text-sm font-medium mb-3">Balance Payment</h3>
-          <Row label="Estimated" value={`¥${po.estBalanceRMB.toLocaleString()} / NPR ${po.estBalanceNPR.toLocaleString()}`} />
+          <Row label="Estimated" value={`¥${po.estBalanceRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / NPR ${po.estBalanceNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           <Row
             label="Est. Date"
             value={
@@ -694,13 +846,7 @@ function OverviewTab({
               />
             }
           />
-          <Row label="Paid" value={`¥${po.paidBalanceRMB.toLocaleString()} / NPR ${po.paidBalanceNPR.toLocaleString()}`} />
-          {advanceCarriedRMB > 0 && (
-            <Row
-              label="Incl. from advance"
-              value={<span className="text-gray-500">¥{advanceCarriedRMB.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>}
-            />
-          )}
+          <Row label="Paid" value={`¥${effectivePaidBalanceRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / NPR ${effectivePaidBalanceNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           <Row
             label="Status"
             value={
@@ -726,6 +872,7 @@ function OverviewTab({
           <DatePairField
             label="Good Completion"
             estValue={dates.estGoodCompletionDate}
+            savedEstValue={toInputDate(po.estGoodCompletionDate)}
             actualValue={dates.actualGoodCompletionDate}
             onEstChange={(v) => setDates({ ...dates, estGoodCompletionDate: v })}
             onActualChange={(v) => setDates({ ...dates, actualGoodCompletionDate: v })}
@@ -733,6 +880,13 @@ function OverviewTab({
               onUpdate({
                 estGoodCompletionDate: dates.estGoodCompletionDate || null,
                 actualGoodCompletionDate: dates.actualGoodCompletionDate || null,
+              })
+            }
+            onSaveWithReason={(reason) =>
+              onUpdate({
+                estGoodCompletionDate: dates.estGoodCompletionDate || null,
+                actualGoodCompletionDate: dates.actualGoodCompletionDate || null,
+                estGoodCompletionDateReason: reason,
               })
             }
           />
@@ -762,19 +916,39 @@ function OverviewTab({
               })
             }
           />
-          <DatePairField
-            label="Nepal Arrival"
-            estValue={dates.estArrivalDateAD}
-            actualValue={dates.actualArrivalDateAD}
-            onEstChange={(v) => setDates({ ...dates, estArrivalDateAD: v })}
-            onActualChange={(v) => setDates({ ...dates, actualArrivalDateAD: v })}
-            onSave={() =>
-              onUpdate({
-                estArrivalDateAD: dates.estArrivalDateAD || null,
-                actualArrivalDateAD: dates.actualArrivalDateAD || null,
-              })
-            }
-          />
+          <div>
+            <DatePairField
+              label="Nepal Arrival"
+              estValue={dates.estArrivalDateAD}
+              actualValue={dates.actualArrivalDateAD}
+              onEstChange={(v) => setDates({ ...dates, estArrivalDateAD: v })}
+              onActualChange={(v) => setDates({ ...dates, actualArrivalDateAD: v })}
+              onSave={() =>
+                onUpdate({
+                  estArrivalDateAD: dates.estArrivalDateAD || null,
+                  estArrivalWeek: dates.estArrivalWeek || null,
+                  actualArrivalDateAD: dates.actualArrivalDateAD || null,
+                  actualArrivalWeek: dates.actualArrivalWeek || null,
+                })
+              }
+            />
+            <label className="block text-[11px] text-gray-400 mt-1">Est. Week</label>
+            <input
+              className="input mb-1"
+              placeholder="auto from date"
+              value={dates.estArrivalWeek}
+              onChange={(e) => setDates({ ...dates, estArrivalWeek: e.target.value })}
+              onBlur={() => onUpdate({ estArrivalWeek: dates.estArrivalWeek || null })}
+            />
+            <label className="block text-[11px] text-gray-400">Actual Week</label>
+            <input
+              className="input"
+              placeholder="auto from date"
+              value={dates.actualArrivalWeek}
+              onChange={(e) => setDates({ ...dates, actualArrivalWeek: e.target.value })}
+              onBlur={() => onUpdate({ actualArrivalWeek: dates.actualArrivalWeek || null })}
+            />
+          </div>
         </div>
       </div>
 
@@ -791,23 +965,80 @@ function OverviewTab({
 function DatePairField({
   label,
   estValue,
+  savedEstValue,
   actualValue,
   onEstChange,
   onActualChange,
   onSave,
+  onSaveWithReason,
 }: {
   label: string;
   estValue: string;
+  savedEstValue?: string;
   actualValue: string;
   onEstChange: (v: string) => void;
   onActualChange: (v: string) => void;
   onSave: () => void;
+  onSaveWithReason?: (reason: string) => void;
 }) {
+  const [pendingReason, setPendingReason] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+
+  function handleEstBlur() {
+    if (onSaveWithReason && savedEstValue !== undefined && estValue !== savedEstValue && estValue) {
+      setPendingReason("");
+      setReason("");
+    } else {
+      onSave();
+    }
+  }
+
+  function confirmWithReason() {
+    if (!reason.trim()) return;
+    onSaveWithReason!(reason.trim());
+    setPendingReason(null);
+    setReason("");
+  }
+
+  function cancelReason() {
+    onEstChange(savedEstValue ?? "");
+    setPendingReason(null);
+    setReason("");
+  }
+
   return (
     <div>
       <div className="text-xs text-gray-500 mb-1">{label}</div>
       <label className="block text-[11px] text-gray-400">Est.</label>
-      <input type="date" className="input mb-1" value={estValue} onChange={(e) => onEstChange(e.target.value)} onBlur={onSave} />
+      <input
+        type="date"
+        className="input mb-1"
+        value={estValue}
+        onChange={(e) => onEstChange(e.target.value)}
+        onBlur={handleEstBlur}
+      />
+      {pendingReason !== null && (
+        <div className="mb-1 p-2 border border-amber-300 bg-amber-50 rounded text-xs space-y-1">
+          <div className="font-medium text-amber-800">Reason for changing Est. date?</div>
+          <input
+            autoFocus
+            className="input w-full"
+            placeholder="e.g. Factory delay, raw material shortage…"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") confirmWithReason(); if (e.key === "Escape") cancelReason(); }}
+          />
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={confirmWithReason}
+              disabled={!reason.trim()}
+              className="rounded bg-gray-900 text-white px-2 py-0.5 disabled:opacity-40"
+            >Save</button>
+            <button type="button" onClick={cancelReason} className="rounded border px-2 py-0.5 text-gray-600">Cancel</button>
+          </div>
+        </div>
+      )}
       <label className="block text-[11px] text-gray-400">Actual</label>
       <input type="date" className="input" value={actualValue} onChange={(e) => onActualChange(e.target.value)} onBlur={onSave} />
     </div>
@@ -859,10 +1090,12 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 type EditableItemRow = {
   chineseSku: string;
   newmewSku: string;
+  orderType: string;
   specificName: string;
   itemType: string;
   brand: string;
   mfgType: string;
+  gender: string;
   front: string;
   temple: string;
   lens: string;
@@ -883,10 +1116,12 @@ function itemToRow(item: Item): EditableItemRow {
   return {
     chineseSku: item.chineseSku ?? "",
     newmewSku: item.newmewSku ?? "",
+    orderType: item.orderType ?? "",
     specificName: item.specificName ?? "",
     itemType: item.itemType ?? "Sunglasses",
     brand: item.brand ?? "",
     mfgType: item.mfgType ?? "READY_GOODS",
+    gender: item.gender ?? "",
     front: item.front ?? "",
     temple: item.temple ?? "",
     lens: item.lens ?? "",
@@ -907,10 +1142,12 @@ function emptyNewItemRow(defaultConvRate: string): EditableItemRow {
   return {
     chineseSku: "",
     newmewSku: "",
+    orderType: "New Order",
     specificName: "",
     itemType: "Sunglasses",
     brand: "",
     mfgType: "READY_GOODS",
+    gender: "",
     front: "",
     temple: "",
     lens: "",
@@ -934,6 +1171,7 @@ function ItemsTab({
   onRefresh,
   itemTypes,
   brands,
+  genders,
   frontMaterials,
   templeMaterials,
   lensMaterials,
@@ -943,6 +1181,7 @@ function ItemsTab({
   onRefresh: () => Promise<void>;
   itemTypes: string[];
   brands: string[];
+  genders: string[];
   frontMaterials: string[];
   templeMaterials: string[];
   lensMaterials: string[];
@@ -1015,6 +1254,20 @@ function ItemsTab({
     setNewRows((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   }
 
+  async function refreshOrderType(
+    skuParams: { newmewSku?: string; chineseSku?: string },
+    excludeItemId: string | undefined,
+    apply: (orderType: string) => void
+  ) {
+    const qs = new URLSearchParams();
+    if (skuParams.newmewSku) qs.set("newmewSku", skuParams.newmewSku);
+    if (skuParams.chineseSku) qs.set("chineseSku", skuParams.chineseSku);
+    if (excludeItemId) qs.set("excludeItemId", excludeItemId);
+    const res = await fetch(`/api/purchase-orders/check-sku?${qs}`);
+    const data = await res.json();
+    apply(data.orderType);
+  }
+
   function applySkuSelect(row: EditableItemRow, product: ProductLookup): EditableItemRow {
     const [sizeLens, sizeBridge, sizeTemple] = (product.size ?? "").split("-");
     // mfgType is intentionally left untouched — it's always user-editable,
@@ -1026,6 +1279,7 @@ function ItemsTab({
       specificName: product.specificName ?? row.specificName,
       itemType: product.itemType ?? row.itemType,
       brand: product.brand ?? row.brand,
+      gender: product.gender ?? row.gender,
       sizeLens: sizeLens || row.sizeLens,
       sizeBridge: sizeBridge || row.sizeBridge,
       sizeTemple: sizeTemple || row.sizeTemple,
@@ -1125,7 +1379,10 @@ function ItemsTab({
           costs,
         }),
       });
-      if (!res.ok) throw new Error("Failed to save changes");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? "Failed to save changes");
+      }
       setNewRows([]);
       setPendingDeletes(new Set());
       await onRefresh();
@@ -1151,6 +1408,7 @@ function ItemsTab({
             <tr>
               <th className="px-2 py-1.5 min-w-[9rem]">Chinese SKU <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[9rem]">Newmew SKU</th>
+              <th className="px-2 py-1.5 min-w-[8rem]">Order Type</th>
               <th className="px-2 py-1.5 min-w-[11rem]">Name</th>
               <th className="px-2 py-1.5 min-w-[8rem]">Type <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Brand <span className="text-red-600">*</span></th>
@@ -1159,6 +1417,7 @@ function ItemsTab({
               <th className="px-2 py-1.5 min-w-[7rem]">Temple <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
+              <th className="px-2 py-1.5 min-w-[7rem]">Gender</th>
               <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
@@ -1166,7 +1425,7 @@ function ItemsTab({
               <th className="px-2 py-1.5 min-w-[8rem]">Amount RMB <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Amount NPR</th>
               <th className="px-2 py-1.5 min-w-[4rem]">Image</th>
-              <th className="px-2 py-1.5 w-10"></th>
+              <th className="px-2 py-1.5 w-16 sticky right-0 bg-gray-100 z-10"></th>
             </tr>
           </thead>
           <tbody>
@@ -1178,10 +1437,18 @@ function ItemsTab({
                   <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("chineseSku") ? "field-invalid" : ""}`}>
                     <SkuAutocomplete
                       value={row.chineseSku}
-                      onChange={(v) => updateExistingRow(item.id, { chineseSku: v })}
+                      onChange={(v) => {
+                        updateExistingRow(item.id, { chineseSku: v });
+                        refreshOrderType({ chineseSku: v, newmewSku: row.newmewSku }, item.id, (orderType) =>
+                          updateExistingRow(item.id, { orderType })
+                        );
+                      }}
                       onSelect={(product) => {
                         const updated = applySkuSelect(row, product);
                         setRows((r) => ({ ...r, [item.id]: updated }));
+                        refreshOrderType({ chineseSku: product.chineseSku, newmewSku: product.newmewSku ?? row.newmewSku }, item.id, (orderType) =>
+                          updateExistingRow(item.id, { orderType })
+                        );
                       }}
                       required
                     />
@@ -1192,6 +1459,16 @@ function ItemsTab({
                       value={row.newmewSku}
                       onChange={(e) => updateExistingRow(item.id, { newmewSku: e.target.value })}
                     />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <select
+                      className="input"
+                      value={row.orderType}
+                      onChange={(e) => updateExistingRow(item.id, { orderType: e.target.value })}
+                    >
+                      <option value="New Order">New Order</option>
+                      <option value="Reorder">Reorder</option>
+                    </select>
                   </td>
                   <td className="px-1 py-1 align-top">
                     <input
@@ -1246,6 +1523,13 @@ function ItemsTab({
                   </td>
                   <td className="px-1 py-1 align-top">
                     <input className="input bg-gray-50" value={deriveCategory(row.front, row.temple, row.lens)} disabled />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <SearchSelect
+                      value={row.gender}
+                      options={strOptions(genders)}
+                      onChange={(v) => updateExistingRow(item.id, { gender: v })}
+                    />
                   </td>
                   <td className={`px-1 py-1 align-top ${existingErrs(item.id, row).has("colors") ? "field-invalid" : ""}`}>
                     <ColorMultiSelect
@@ -1329,32 +1613,30 @@ function ItemsTab({
                       onClear={() => updateExistingRow(item.id, { imageUrl: "" })}
                     />
                   </td>
-                  <td className="px-1 py-1 text-center align-top whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => addNewRow()}
-                      className="text-blue-600 hover:underline text-xs mr-2"
-                      title="Add item row"
-                    >
-                      + Add
-                    </button>
-                    {isPendingDelete ? (
+                  <td className="px-1 py-1 text-center align-top sticky right-0 bg-white border-l border-gray-200 z-10">
+                    <div className="flex items-center justify-center gap-1">
                       <button
                         type="button"
-                        onClick={() => unmarkForDelete(item.id)}
-                        className="text-gray-600 hover:underline text-xs"
-                      >
-                        Undo
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => markForDelete(item.id)}
-                        className="text-red-600 hover:underline text-xs"
-                      >
-                        Delete
-                      </button>
-                    )}
+                        onClick={() => addNewRow()}
+                        className="w-6 h-6 flex items-center justify-center rounded text-blue-600 hover:bg-blue-50"
+                        title="Add row below"
+                      >＋</button>
+                      {isPendingDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => unmarkForDelete(item.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 text-xs"
+                          title="Undo delete"
+                        >↩</button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => markForDelete(item.id)}
+                          className="w-6 h-6 flex items-center justify-center rounded text-red-500 hover:bg-red-50"
+                          title="Delete row"
+                        >🗑</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -1365,8 +1647,18 @@ function ItemsTab({
               <td className={`px-1 py-1 align-top ${newErrs(newRow).has("chineseSku") ? "field-invalid" : ""}`}>
                 <SkuAutocomplete
                   value={newRow.chineseSku}
-                  onChange={(v) => updateNewRow(newRow.key, { chineseSku: v })}
-                  onSelect={(product) => updateNewRow(newRow.key, applySkuSelect(newRow, product))}
+                  onChange={(v) => {
+                    updateNewRow(newRow.key, { chineseSku: v });
+                    refreshOrderType({ chineseSku: v, newmewSku: newRow.newmewSku }, undefined, (orderType) =>
+                      updateNewRow(newRow.key, { orderType })
+                    );
+                  }}
+                  onSelect={(product) => {
+                    updateNewRow(newRow.key, applySkuSelect(newRow, product));
+                    refreshOrderType({ chineseSku: product.chineseSku, newmewSku: product.newmewSku ?? newRow.newmewSku }, undefined, (orderType) =>
+                      updateNewRow(newRow.key, { orderType })
+                    );
+                  }}
                 />
               </td>
               <td className="px-1 py-1 align-top">
@@ -1375,6 +1667,16 @@ function ItemsTab({
                   value={newRow.newmewSku}
                   onChange={(e) => updateNewRow(newRow.key, { newmewSku: e.target.value })}
                 />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <select
+                  className="input"
+                  value={newRow.orderType}
+                  onChange={(e) => updateNewRow(newRow.key, { orderType: e.target.value })}
+                >
+                  <option value="New Order">New Order</option>
+                  <option value="Reorder">Reorder</option>
+                </select>
               </td>
               <td className="px-1 py-1 align-top">
                 <input
@@ -1429,6 +1731,13 @@ function ItemsTab({
               </td>
               <td className="px-1 py-1 align-top">
                 <input className="input bg-gray-50" value={deriveCategory(newRow.front, newRow.temple, newRow.lens)} disabled />
+              </td>
+              <td className="px-1 py-1 align-top">
+                <SearchSelect
+                  value={newRow.gender}
+                  options={strOptions(genders)}
+                  onChange={(v) => updateNewRow(newRow.key, { gender: v })}
+                />
               </td>
               <td className={`px-1 py-1 align-top ${newErrs(newRow).has("colors") ? "field-invalid" : ""}`}>
                 <ColorMultiSelect
@@ -1512,22 +1821,21 @@ function ItemsTab({
                   onClear={() => updateNewRow(newRow.key, { imageUrl: "" })}
                 />
               </td>
-              <td className="px-1 py-1 text-center align-top whitespace-nowrap">
-                <button
-                  type="button"
-                  onClick={() => addNewRow(newRow.key)}
-                  className="text-blue-600 hover:underline text-xs mr-2"
-                  title="Add item row below"
-                >
-                  + Add
-                </button>
-                <button
-                  type="button"
-                  onClick={() => removeNewRow(newRow.key)}
-                  className="text-red-600 hover:underline text-xs"
-                >
-                  ✕
-                </button>
+              <td className="px-1 py-1 text-center align-top sticky right-0 bg-gray-50 border-l border-gray-200 z-10">
+                <div className="flex items-center justify-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => addNewRow(newRow.key)}
+                    className="w-6 h-6 flex items-center justify-center rounded text-blue-600 hover:bg-blue-50"
+                    title="Add row below"
+                  >＋</button>
+                  <button
+                    type="button"
+                    onClick={() => removeNewRow(newRow.key)}
+                    className="w-6 h-6 flex items-center justify-center rounded text-red-500 hover:bg-red-50"
+                    title="Remove row"
+                  >🗑</button>
+                </div>
               </td>
             </tr>
             ))}
@@ -1580,9 +1888,9 @@ function ItemsTab({
           <div>
             <span className="block text-xs text-gray-500 mb-1">Total PO Amount</span>
             <div className="text-sm font-semibold">
-              ¥{totalPOAmountRMB.toLocaleString()}
+              ¥{totalPOAmountRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               <span className="block text-xs text-gray-400 font-normal">
-                NPR {totalPOAmountNPR.toLocaleString()}
+                NPR {totalPOAmountNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           </div>
@@ -1777,9 +2085,9 @@ function LedgerTab({ po }: { po: PO }) {
   const advanceRawRMB = r2(sortedPayments.filter((p) => p.paymentType === "ADVANCE").reduce((s, p) => s + p.amountRMB, 0));
   const advanceCarryRMB = po.estAdvanceRMB > 0 ? r2(Math.max(advanceRawRMB - po.estAdvanceRMB, 0)) : 0;
 
-  const advanceDueRMB = r2(Math.max(po.estAdvanceRMB - po.paidAdvanceRMB, 0));
+  const advanceDueRMB = r2(Math.max(po.estAdvanceRMB - effectivePaidAdvanceRMB, 0));
   const advanceDueNPR = r2(Math.max(po.estAdvanceNPR - po.paidAdvanceNPR, 0));
-  const balanceDueRMB = r2(Math.max(po.estBalanceRMB - po.paidBalanceRMB, 0));
+  const balanceDueRMB = r2(Math.max(po.estBalanceRMB - effectivePaidBalanceRMB, 0));
   const balanceDueNPR = r2(Math.max(po.estBalanceNPR - po.paidBalanceNPR, 0));
 
   const advanceIsPastDue = isPastDue(po.estAdvanceDate);
@@ -1958,12 +2266,12 @@ function LedgerTab({ po }: { po: PO }) {
       {ledger === "total" && (
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            <StatCard label="PO Amount (Cr)" value={`¥${totalPOAmountRMB.toLocaleString()}`} sub={`NPR ${totalPOAmountNPR.toLocaleString()}`} />
-            <StatCard label="Paid (Dr)" value={`¥${totalPaidRMB.toLocaleString()}`} sub={`NPR ${totalPaidNPR.toLocaleString()}`} />
+            <StatCard label="PO Amount (Cr)" value={`¥${totalPOAmountRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`NPR ${totalPOAmountNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
+            <StatCard label="Paid (Dr)" value={`¥${totalPaidRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`NPR ${totalPaidNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
             <StatCard
               label="Balance Payable"
-              value={`¥${r2(totalPOAmountRMB - totalPaidRMB).toLocaleString()}`}
-              sub={`NPR ${r2(totalPOAmountNPR - totalPaidNPR).toLocaleString()}`}
+              value={`¥${r2(totalPOAmountRMB - totalPaidRMB).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              sub={`NPR ${r2(totalPOAmountNPR - totalPaidNPR).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             />
           </div>
           <LedgerTable rows={mode === "summary" ? totalSummaryRows : totalDetailRows} emptyLabel="No transactions recorded yet." />
@@ -1973,11 +2281,11 @@ function LedgerTab({ po }: { po: PO }) {
       {ledger === "due" && (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
-            <StatCard label="Total Due (Cr)" value={`¥${totalDueRMB.toLocaleString()}`} sub={`NPR ${totalDueNPR.toLocaleString()}`} />
+            <StatCard label="Total Due (Cr)" value={`¥${totalDueRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} sub={`NPR ${totalDueNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
             <StatCard
               label="Total Paid (Dr)"
-              value={`¥${r2(po.paidAdvanceRMB + po.paidBalanceRMB).toLocaleString()}`}
-              sub={`NPR ${r2(po.paidAdvanceNPR + po.paidBalanceNPR).toLocaleString()}`}
+              value={`¥${r2(po.paidAdvanceRMB + po.paidBalanceRMB).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+              sub={`NPR ${r2(po.paidAdvanceNPR + po.paidBalanceNPR).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
             />
           </div>
           {mode === "summary" ? (
@@ -2010,8 +2318,8 @@ function LedgerTab({ po }: { po: PO }) {
                 className="w-full flex items-center justify-between text-sm"
               >
                 <span className="text-gray-600">
-                  Not Yet Due: <span className="font-medium text-gray-800">¥{notYetDueRMB.toLocaleString()}</span>{" "}
-                  <span className="text-gray-400">/ NPR {notYetDueNPR.toLocaleString()}</span>
+                  Not Yet Due: <span className="font-medium text-gray-800">¥{notYetDueRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>{" "}
+                  <span className="text-gray-400">/ NPR {notYetDueNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </span>
                 <span className="text-gray-400">{showNotYetDue ? "▲ Hide" : "▼ Show details"}</span>
               </button>
@@ -2022,8 +2330,8 @@ function LedgerTab({ po }: { po: PO }) {
                       <span>{r.particular}</span>
                       <span className="text-gray-500">Due: {fmtDate(r.dueDate)}</span>
                       <span>
-                        {`¥${r2(r.cr - r.dr).toLocaleString()}`}{" "}
-                        <span className="text-gray-400">/ NPR {r2(r.crNPR - r.drNPR).toLocaleString()}</span>
+                        {`¥${r2(r.cr - r.dr).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}{" "}
+                        <span className="text-gray-400">/ NPR {r2(r.crNPR - r.drNPR).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </span>
                     </div>
                   ))}
@@ -2038,11 +2346,12 @@ function LedgerTab({ po }: { po: PO }) {
 }
 
 function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
+  const latestRate = [...po.payments].sort((a, b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime())[0]?.exchangeRate;
   const emptyForm = () => ({
     paymentDate: new Date().toISOString().slice(0, 10),
     paymentType: "ADVANCE",
     amountRMB: "",
-    exchangeRate: "",
+    exchangeRate: latestRate ? String(latestRate) : "",
     notes: "",
   });
   const [showForm, setShowForm] = useState(false);
@@ -2050,9 +2359,15 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [formFiles, setFormFiles] = useState<File[]>([]);
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const fmtRMB = (n: number) => `¥${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+
+  const advanceCarriedRMB = r2(Math.max(po.paidAdvanceRMB - po.estAdvanceRMB, 0));
+  const effectivePaidBalanceRMB = po.paidBalanceRMB + advanceCarriedRMB;
 
   // Work out what is still due as if the payment being edited didn't exist. An
   // advance beyond its estimate counts toward the balance (same rule as the server).
@@ -2060,7 +2375,7 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
   const sumType = (t: string) => others.filter((p) => p.paymentType === t).reduce((s, p) => s + p.amountRMB, 0);
   const advRaw = sumType("ADVANCE");
   const balRaw = sumType("BALANCE");
-  const carry = po.estAdvanceRMB > 0 ? Math.max(advRaw - po.estAdvanceRMB, 0) : 0;
+  const carry = Math.max(advRaw - po.estAdvanceRMB, 0);
   const advPaid = advRaw - carry;
   const balPaid = balRaw + carry;
   const amount = parseFloat(form.amountRMB) || 0;
@@ -2094,6 +2409,7 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
     setEditingId(null);
     setForm(emptyForm());
     setError(null);
+    setFormFiles([]);
   }
 
   function startEdit(p: Payment) {
@@ -2113,7 +2429,7 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
     e.preventDefault();
     if (blockedByTotal) {
       setError(
-        `This payment would bring total payments to ¥${wouldTotalRMB.toLocaleString()}, exceeding the PO total of ¥${totalPOAmountRMB.toLocaleString()} by ¥${overTotalRMB.toLocaleString()}. Reduce the amount before saving.`
+        `This payment would bring total payments to ¥${wouldTotalRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}, exceeding the PO total of ¥${totalPOAmountRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} by ¥${overTotalRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. Reduce the amount before saving.`
       );
       return;
     }
@@ -2133,6 +2449,13 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to save payment");
       }
+      const saved = await res.json();
+      const paymentId = editingId ?? saved.id;
+      for (const file of formFiles) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetch(`/api/purchase-orders/${po.id}/payments/${paymentId}/advice`, { method: "POST", body: fd });
+      }
       closeForm();
       await onRefresh();
     } catch (err) {
@@ -2146,6 +2469,31 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
     if (!confirm("Delete this payment?")) return;
     await fetch(`/api/purchase-orders/${po.id}/payments/${paymentId}`, { method: "DELETE" });
     if (editingId === paymentId) closeForm();
+    await onRefresh();
+  }
+
+  async function handleAdviceUpload(paymentId: string, file: File) {
+    setUploadingFor(paymentId);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/purchase-orders/${po.id}/payments/${paymentId}/advice`, { method: "POST", body: fd });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Upload failed");
+      }
+      await onRefresh();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingFor(null);
+    }
+  }
+
+  async function handleAdviceDelete(paymentId: string, adviceId: string) {
+    if (!confirm("Remove this payment advice?")) return;
+    await fetch(`/api/purchase-orders/${po.id}/payments/${paymentId}/advice?adviceId=${adviceId}`, { method: "DELETE" });
     await onRefresh();
   }
 
@@ -2173,6 +2521,26 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
           <input type="number" step="0.01" min="0.01" className="input" placeholder="Amount RMB" value={form.amountRMB} onChange={(e) => setForm({ ...form, amountRMB: e.target.value })} required />
           <input type="number" step="0.01" className="input" placeholder="Exchange Rate" value={form.exchangeRate} onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })} required />
           <input className="input col-span-2" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+          <div className="col-span-3">
+            <label className="block text-xs text-gray-500 mb-1">Payment advice / evidence (photos or PDF)</label>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              multiple
+              className="text-sm"
+              onChange={(e) => setFormFiles(Array.from(e.target.files ?? []))}
+            />
+            {formFiles.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {formFiles.map((f, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 text-xs bg-gray-100 border rounded px-1.5 py-0.5">
+                    {f.name}
+                    <button type="button" onClick={() => setFormFiles(formFiles.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           {info && (
             <div className="col-span-3 text-xs text-gray-500">
               {info.label}: estimated {fmtRMB(info.est)}, paid {fmtRMB(info.paid)}
@@ -2210,18 +2578,70 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
               <th className="px-3 py-2">Rate</th>
               <th className="px-3 py-2">NPR</th>
               <th className="px-3 py-2">Notes</th>
+              <th className="px-3 py-2">Evidence</th>
               <th className="px-3 py-2"></th>
             </tr>
           </thead>
           <tbody>
-            {po.payments.map((p) => (
+            {po.payments.map((p) => {
+              // For advance payments, compute how much of this payment is reclassified as balance
+              let carriedNote: string | null = null;
+              if (p.paymentType === "ADVANCE") {
+                const advanceBefore = po.payments
+                  .filter((x) => x.paymentType === "ADVANCE" && new Date(x.paymentDate) < new Date(p.paymentDate))
+                  .reduce((s, x) => s + x.amountRMB, 0);
+                const advanceAfter = advanceBefore + p.amountRMB;
+                const cap = po.estAdvanceRMB;
+                const carried = r2(Math.max(advanceAfter - cap, 0) - Math.max(advanceBefore - cap, 0));
+                if (carried > 0) carriedNote = `¥${carried.toLocaleString(undefined, { maximumFractionDigits: 2 })} adjusted to balance`;
+              }
+              return (
               <tr key={p.id} className={`border-t ${editingId === p.id ? "bg-amber-50" : ""}`}>
                 <td className="px-3 py-2">{fmtDate(p.paymentDate)}</td>
                 <td className="px-3 py-2">{p.paymentType}</td>
-                <td className="px-3 py-2">¥{p.amountRMB.toLocaleString()}</td>
+                <td className="px-3 py-2 text-right tabular-nums">¥{p.amountRMB.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                 <td className="px-3 py-2">{p.exchangeRate}</td>
-                <td className="px-3 py-2">NPR {p.amountNPR.toLocaleString()}</td>
-                <td className="px-3 py-2">{p.notes ?? "-"}</td>
+                <td className="px-3 py-2 text-right tabular-nums">NPR {p.amountNPR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                <td className="px-3 py-2">
+                  {p.notes && <span>{p.notes}</span>}
+                  {carriedNote && <span className="text-gray-400 text-xs block">{carriedNote}</span>}
+                  {!p.notes && !carriedNote && "-"}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap gap-1 items-center">
+                    {(p.advices ?? []).map((a) => (
+                      <span key={a.id} className="inline-flex items-center gap-1 text-xs bg-gray-100 border rounded px-1.5 py-0.5">
+                        {a.mimeType === "application/pdf" ? (
+                          <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline max-w-[100px] truncate" title={a.fileName}>
+                            📄 {a.fileName}
+                          </a>
+                        ) : (
+                          <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline max-w-[100px] truncate" title={a.fileName}>
+                            🖼 {a.fileName}
+                          </a>
+                        )}
+                        <button onClick={() => handleAdviceDelete(p.id, a.id)} className="text-red-400 hover:text-red-600 ml-0.5" title="Remove">×</button>
+                      </span>
+                    ))}
+                    <label className={`cursor-pointer text-xs text-gray-500 hover:text-gray-800 border rounded px-1.5 py-0.5 ${uploadingFor === p.id ? "opacity-50" : ""}`}>
+                      {uploadingFor === p.id ? "Uploading…" : "+ Add"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        className="hidden"
+                        disabled={uploadingFor === p.id}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleAdviceUpload(p.id, f);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                  </div>
+                  {uploadError && uploadingFor === null && (
+                    <div className="text-xs text-red-600 mt-0.5">{uploadError}</div>
+                  )}
+                </td>
                 <td className="px-3 py-2 whitespace-nowrap">
                   <button onClick={() => startEdit(p)} className="text-blue-600 hover:underline text-xs mr-3">
                     Edit
@@ -2231,10 +2651,10 @@ function PaymentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
                   </button>
                 </td>
               </tr>
-            ))}
+            );})}
             {po.payments.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                   No payments recorded yet.
                 </td>
               </tr>
@@ -2252,8 +2672,112 @@ type ShipmentLineForm = {
   specificName: string;
   remaining: number;
   shippedQty: string;
-  receivedQty: string;
 };
+
+function ReceivingEventRow({
+  event,
+  shipmentId,
+  poId,
+  onDone,
+  shipmentItemId,
+  initialCustomRate,
+  showCustomRate,
+}: {
+  event: ReceivingEvent;
+  shipmentId: string;
+  poId: string;
+  onDone: () => void;
+  shipmentItemId?: string;
+  initialCustomRate?: number | null;
+  showCustomRate?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [date, setDate] = useState(toInputDate(event.receivedDate));
+  const [qty, setQty] = useState(String(event.receivedQty));
+  const [notes, setNotes] = useState(event.notes ?? "");
+  const [customRate, setCustomRate] = useState(initialCustomRate != null ? String(initialCustomRate) : "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    await fetch(`/api/purchase-orders/${poId}/shipments/${shipmentId}/receiving-events/${event.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ receivedDate: date, receivedQty: qty, notes }),
+    });
+    if (showCustomRate && shipmentItemId) {
+      await fetch(`/api/purchase-orders/${poId}/shipments/${shipmentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customRates: [{ shipmentItemId, rate: customRate === "" ? null : customRate }] }),
+      });
+    }
+    setSaving(false);
+    setEditing(false);
+    onDone();
+  }
+
+  async function del() {
+    if (!confirm("Delete this receiving event?")) return;
+    setSaving(true);
+    await fetch(`/api/purchase-orders/${poId}/shipments/${shipmentId}/receiving-events/${event.id}`, { method: "DELETE" });
+    setSaving(false);
+    onDone();
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1 group">
+        <span>{toInputDate(event.receivedDate)}: {event.receivedQty}{event.notes ? ` (${event.notes})` : ""}</span>
+        {!editing && <>
+          <button onClick={() => setEditing(true)} className="opacity-0 group-hover:opacity-100 text-blue-500 hover:underline ml-1 text-xs">edit</button>
+          <button onClick={del} disabled={saving} className="opacity-0 group-hover:opacity-100 text-red-400 hover:underline text-xs">del</button>
+        </>}
+      </div>
+      {editing && (
+        <div className="border border-blue-200 rounded-lg bg-blue-50/40 p-3 space-y-2">
+          <div className={`grid gap-2 ${showCustomRate ? "grid-cols-[auto_auto_auto_1fr]" : "grid-cols-[auto_1fr]"}`}>
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-500 mb-1">Date</span>
+              <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-500 mb-1">Qty</span>
+              <input type="number" min="0" className="input w-20 text-right" value={qty} onChange={(e) => setQty(e.target.value)} />
+            </label>
+            {showCustomRate && (
+              <label className="block">
+                <span className="block text-xs font-medium text-gray-500 mb-1">Custom Rate/Unit (NPR)</span>
+                <input type="number" min="0" className="input w-28 text-right" placeholder="NPR/unit" value={customRate} onChange={(e) => setCustomRate(e.target.value)} />
+              </label>
+            )}
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-500 mb-1">Notes</span>
+              <input className="input w-full" placeholder="optional" value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </label>
+          </div>
+          {showCustomRate && (() => {
+            const q = parseInt(qty) || 0;
+            const r = parseFloat(customRate) || 0;
+            const total = q > 0 && r > 0 ? q * r : null;
+            return total != null ? (
+              <div className="flex justify-end text-xs text-gray-600">
+                <span>Item Custom Total:&nbsp;</span>
+                <span className="font-semibold tabular-nums text-gray-900">NPR {total.toLocaleString()}</span>
+              </div>
+            ) : null;
+          })()}
+          <div className="flex gap-2">
+            <button onClick={save} disabled={saving} className="rounded bg-gray-900 text-white text-xs px-3 py-1.5 hover:bg-gray-700 disabled:opacity-50">
+              {saving ? "Saving…" : "Save Changes"}
+            </button>
+            <button onClick={() => setEditing(false)} className="rounded border text-xs px-3 py-1.5 text-gray-600 hover:bg-gray-50">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ReceivingForm({
   shipment,
@@ -2270,8 +2794,12 @@ function ReceivingForm({
   const [notes, setNotes] = useState(shipment.notes ?? "");
   const [eventDate, setEventDate] = useState(new Date().toISOString().slice(0, 10));
   const [newQtys, setNewQtys] = useState<Record<string, string>>({});
+  const [customRates, setCustomRates] = useState<Record<string, string>>(() =>
+    Object.fromEntries(shipment.items.map((l) => [l.id, l.actualCustomRateNPR != null ? String(l.actualCustomRateNPR) : ""]))
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const customsCleared = shipment.status !== "SHIPPED" && shipment.status !== "AT_CUSTOM";
 
   const remainingFor = (line: ShipmentItem) => line.shippedQty - line.receivedQty;
 
@@ -2280,14 +2808,18 @@ function ReceivingForm({
     const entries = shipment.items
       .map((line) => ({ poItemId: line.poItemId, receivedQty: parseInt(newQtys[line.poItemId] ?? "") || 0 }))
       .filter((entry) => entry.receivedQty > 0);
-    if (entries.length === 0) {
-      setError("Enter a received quantity for at least one item.");
+    const hasRates = customsCleared && Object.values(customRates).some((r) => r !== "");
+    if (entries.length === 0 && !hasRates) {
+      setError("Enter a received quantity or custom rate for at least one item.");
       return;
     }
 
     setSaving(true);
     setError(null);
     try {
+      const ratePayload = customsCleared
+        ? shipment.items.map((l) => ({ shipmentItemId: l.id, rate: customRates[l.id] === "" ? null : customRates[l.id] }))
+        : undefined;
       const res = await fetch(`/api/purchase-orders/${poId}/shipments/${shipment.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2295,6 +2827,7 @@ function ReceivingForm({
           arrivalDate,
           notes,
           receivingEvents: entries.map((entry) => ({ ...entry, receivedDate: eventDate })),
+          ...(ratePayload ? { customRates: ratePayload } : {}),
         }),
       });
       if (!res.ok) {
@@ -2330,9 +2863,8 @@ function ReceivingForm({
   }
 
   const fullyReceived = shipment.items.every((line) => remainingFor(line) <= 0);
-  // Receiving can't start until this shipment has cleared customs - it must
-  // be marked AT_CUSTOM first via the PO's "Mark: Custom" picker.
-  const awaitingCustoms = shipment.status === "SHIPPED";
+  // Receiving can't start until this shipment has cleared customs (AT_CUSTOM_CLEARANCE).
+  const awaitingCustoms = shipment.status === "SHIPPED" || shipment.status === "AT_CUSTOM";
 
   return (
     <div className="border-t border-gray-100 bg-gray-50/60 p-4 space-y-4">
@@ -2357,10 +2889,14 @@ function ReceivingForm({
         </div>
       </div>
 
-      {awaitingCustoms && (
+      {shipment.status === "SHIPPED" && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          This shipment must be marked as at Customs before receiving can be logged. Use the PO&rsquo;s &ldquo;Mark:
-          Custom&rdquo; button to select it.
+          This shipment hasn&rsquo;t reached Customs yet. Use the PO&rsquo;s &ldquo;Mark: Custom Arrival&rdquo; button to mark it.
+        </div>
+      )}
+      {shipment.status === "AT_CUSTOM" && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          This shipment is at Customs but hasn&rsquo;t cleared yet. Use the PO&rsquo;s &ldquo;Mark: Custom Clearance&rdquo; button to mark it.
         </div>
       )}
 
@@ -2372,6 +2908,7 @@ function ReceivingForm({
               <th className="px-3 py-2 font-medium">Item</th>
               <th className="px-3 py-2 font-medium text-right">Shipped</th>
               <th className="px-3 py-2 font-medium text-right">Received So Far</th>
+              {customsCleared && <th className="px-3 py-2 font-medium text-right">Custom Rate/Unit (NPR)</th>}
               <th className="px-3 py-2 font-medium">History</th>
             </tr>
           </thead>
@@ -2387,12 +2924,29 @@ function ReceivingForm({
                   <td className="px-3 py-2 text-xs text-gray-500">
                     {line.receivingEvents.length === 0 && "-"}
                     {line.receivingEvents.map((ev) => (
-                      <div key={ev.id}>
-                        {fmtDate(ev.receivedDate)}: {ev.receivedQty}
-                        {ev.notes ? ` (${ev.notes})` : ""}
-                      </div>
+                      <ReceivingEventRow
+                        key={ev.id}
+                        event={ev}
+                        shipmentId={shipment.id}
+                        poId={poId}
+                        onDone={onDone}
+                        shipmentItemId={line.id}
+                        initialCustomRate={line.actualCustomRateNPR}
+                        showCustomRate={customsCleared}
+                      />
                     ))}
                   </td>
+                  {customsCleared && (
+                    <td className="px-3 py-2.5 text-right">
+                      <CustomRateInput
+                        shipmentId={shipment.id}
+                        poId={poId}
+                        shipmentItemId={line.id}
+                        value={line.actualCustomRateNPR}
+                        onSaved={onDone}
+                      />
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -2411,26 +2965,67 @@ function ReceivingForm({
             disabled={awaitingCustoms}
           />
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <div className={`grid gap-2 text-xs font-medium text-gray-400 px-1 ${customsCleared ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto]"}`}>
+            <span>SKU</span>
+            <span className="text-right w-16">Remaining</span>
+            <span className="text-right w-20">Recv Qty</span>
+            {customsCleared && <span className="text-right w-28">Custom Rate/Unit</span>}
+            {customsCleared && <span className="text-right w-24">Item Total</span>}
+          </div>
           {shipment.items.map((line) => {
             const item = itemById.get(line.poItemId);
             const remaining = remainingFor(line);
+            const qty = parseInt(newQtys[line.poItemId] ?? "") || 0;
+            const rate = parseFloat(customRates[line.id] ?? "") || 0;
+            const itemTotal = qty > 0 && rate > 0 ? qty * rate : null;
             return (
-              <label key={line.id} className="flex items-center gap-2 text-xs">
-                <span className="flex-1 font-mono">{item?.chineseSku ?? line.poItemId}</span>
-                <span className="text-gray-400">rem. {remaining}</span>
+              <div key={line.id} className={`grid gap-2 items-center text-xs ${customsCleared ? "grid-cols-[1fr_auto_auto_auto_auto]" : "grid-cols-[1fr_auto_auto]"}`}>
+                <span className="font-mono truncate">{item?.chineseSku ?? line.poItemId}</span>
+                <span className="text-gray-400 text-right w-16">rem. {remaining}</span>
                 <input
                   type="number"
                   min="0"
-                  className="input w-20"
+                  className="input w-20 text-right"
                   placeholder="Qty"
                   disabled={awaitingCustoms}
                   value={newQtys[line.poItemId] ?? ""}
                   onChange={(e) => setNewQtys({ ...newQtys, [line.poItemId]: e.target.value })}
                 />
-              </label>
+                {customsCleared && (
+                  <input
+                    type="number"
+                    min="0"
+                    className="input w-28 text-right"
+                    placeholder="NPR/unit"
+                    value={customRates[line.id] ?? ""}
+                    onChange={(e) => setCustomRates({ ...customRates, [line.id]: e.target.value })}
+                  />
+                )}
+                {customsCleared && (
+                  <span className="text-right w-24 tabular-nums text-gray-700">
+                    {itemTotal != null ? itemTotal.toLocaleString() : "—"}
+                  </span>
+                )}
+              </div>
             );
           })}
+          {customsCleared && (() => {
+            const grandTotal = shipment.items.reduce((sum, line) => {
+              const qty = parseInt(newQtys[line.poItemId] ?? "") || 0;
+              const rate = parseFloat(customRates[line.id] ?? "") || 0;
+              return sum + (qty > 0 && rate > 0 ? qty * rate : 0);
+            }, 0);
+            return grandTotal > 0 ? (
+              <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-center text-xs border-t pt-1 mt-1">
+                <span className="font-medium text-gray-600">Total Custom (NPR)</span>
+                <span className="w-16" />
+                <span className="w-20" />
+                <span className="w-28" />
+                <span className="text-right w-24 tabular-nums font-semibold text-gray-900">{grandTotal.toLocaleString()}</span>
+              </div>
+            ) : null;
+          })()}
         </div>
         {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</div>}
         <button
@@ -2472,6 +3067,14 @@ function CustomPickerModal({
   async function handleConfirm() {
     if (selected.size === 0) {
       setError("Select at least one shipment.");
+      return;
+    }
+    // Client-side: customs date must not be before any selected shipment's shipping date
+    const selectedShipments = eligible.filter((s) => selected.has(s.id));
+    const tooEarly = selectedShipments.filter((s) => actualDate < s.shippingDate.slice(0, 10));
+    if (tooEarly.length > 0) {
+      const latest = tooEarly.map((s) => s.shippingDate.slice(0, 10)).sort().pop()!;
+      setError(`Customs arrival date cannot be before shipping date (${latest})`);
       return;
     }
     setSaving(true);
@@ -2536,18 +3139,92 @@ function CustomPickerModal({
   );
 }
 
+function ClearancePickerModal({ po, onClose, onDone }: { po: PO; onClose: () => void; onDone: () => Promise<void> }) {
+  const eligible = po.shipments.filter((s) => s.status === "AT_CUSTOM");
+  const [selected, setSelected] = useState<Set<string>>(new Set(eligible.map((s) => s.id)));
+  const [actualDate, setActualDate] = useState(new Date().toISOString().slice(0, 10));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggle(id: string) {
+    setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+
+  async function handleConfirm() {
+    if (selected.size === 0) { setError("Select at least one shipment."); return; }
+    const selectedShipments = eligible.filter((s) => selected.has(s.id));
+    const tooEarly = selectedShipments.filter((s) => s.actualCustomArrivalDate && actualDate < s.actualCustomArrivalDate.slice(0, 10));
+    if (tooEarly.length > 0) {
+      const latest = tooEarly.map((s) => s.actualCustomArrivalDate!.slice(0, 10)).sort().pop()!;
+      setError(`Clearance date cannot be before customs arrival date (${latest})`);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/purchase-orders/${po.id}/stage/custom-clearance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shipmentIds: Array.from(selected), actualDate }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to update shipments");
+      }
+      await onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update shipments");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+      <div className="bg-white rounded shadow-lg p-4 w-full max-w-lg">
+        <h3 className="text-sm font-medium mb-1">Which shipments cleared Customs?</h3>
+        <p className="text-xs text-gray-500 mb-3">Select the shipments that have completed customs clearance.</p>
+        <div className="border rounded divide-y max-h-64 overflow-y-auto">
+          {eligible.map((s) => (
+            <label key={s.id} className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+              <input type="checkbox" checked={selected.has(s.id)} onChange={() => toggle(s.id)} />
+              <span className="font-medium">{fmtDate(s.shippingDate)}</span>
+              <span className="text-gray-500">{s.shippedQty} units</span>
+              <span className="text-gray-400">{s.transportMode}</span>
+              {s.actualCustomArrivalDate && <span className="text-xs text-gray-400">arrived {fmtDate(s.actualCustomArrivalDate)}</span>}
+            </label>
+          ))}
+          {eligible.length === 0 && <div className="px-3 py-4 text-center text-gray-400 text-xs">No shipments at Custom Arrival.</div>}
+        </div>
+        <label className="block mt-3">
+          <span className="block text-xs font-medium text-gray-500 mb-1">Customs Clearance Date</span>
+          <input type="date" className="input" value={actualDate} onChange={(e) => setActualDate(e.target.value)} />
+        </label>
+        {error && <div className="text-sm text-red-600 mt-2">{error}</div>}
+        <div className="flex justify-end gap-2 mt-4">
+          <button onClick={onClose} className="text-sm text-gray-600 hover:underline px-3 py-1.5">Cancel</button>
+          <button onClick={handleConfirm} disabled={saving || eligible.length === 0} className="rounded bg-gray-900 text-white text-sm px-4 py-1.5 hover:bg-gray-700 disabled:opacity-50">
+            {saving ? "Saving..." : "Mark as Cleared"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 type HistoryRow = {
   key: string;
   stage: Stage;
   label: string;
   dateLabel: string | null;
   shipmentLabel: string | null;
-  actualDate: string;
+  actualDate: string | null;
   estimateDate: string | null;
-  eventId: string;
+  eventId: string | null;
 };
 
-function varianceLabel(actual: string, estimate: string | null) {
+function varianceLabel(actual: string | null, estimate: string | null) {
+  if (!actual) return null;
   if (!estimate) return null;
   const days = Math.round((new Date(actual).getTime() - new Date(estimate).getTime()) / 86400000);
   if (days === 0) return { text: "On time", tone: "text-green-700 bg-green-50" };
@@ -2569,23 +3246,54 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
   const stages = stagesFor(mfgType);
   const shipmentIndexById = new Map(po.shipments.map((s, i) => [s.id, i + 1]));
 
-  const rows: HistoryRow[] = po.stageEvents
-    .map((ev) => {
-      const stage = ev.stage as Stage;
+  const recordedStages = new Set(po.stageEvents.filter((e) => !e.shipmentId).map((e) => e.stage));
+  const currentStageIdx = stages.indexOf(po.stage as Stage);
+
+  const eventRows: HistoryRow[] = po.stageEvents.map((ev) => {
+    const stage = ev.stage as Stage;
+    const estField = STAGE_ESTIMATE_FIELD[stage];
+    const estimateDate = ev.shipmentId ? null : estField ? (po as unknown as Record<string, string | null>)[estField] : null;
+    return {
+      key: ev.id,
+      stage,
+      label: STAGE_LABELS[stage] ?? stage,
+      dateLabel: STAGE_DATE_LABELS[stage] ?? null,
+      shipmentLabel: ev.shipmentId ? `Shipment #${shipmentIndexById.get(ev.shipmentId) ?? "?"}` : null,
+      actualDate: ev.actualDate,
+      estimateDate,
+      eventId: ev.id,
+    };
+  });
+
+  // Synthesize placeholder rows for PO-level stages the PO has clearly passed
+  // through (up to and including its current stage) but that have no recorded event.
+  const syntheticRows: HistoryRow[] = stages
+    .slice(0, currentStageIdx + 1)
+    .filter((s) => !recordedStages.has(s))
+    .map((stage) => {
       const estField = STAGE_ESTIMATE_FIELD[stage];
-      const estimateDate = ev.shipmentId ? null : estField ? (po as unknown as Record<string, string | null>)[estField] : null;
+      const estimateDate = estField ? (po as unknown as Record<string, string | null>)[estField] : null;
       return {
-        key: ev.id,
+        key: `synthetic-${stage}`,
         stage,
         label: STAGE_LABELS[stage] ?? stage,
         dateLabel: STAGE_DATE_LABELS[stage] ?? null,
-        shipmentLabel: ev.shipmentId ? `Shipment #${shipmentIndexById.get(ev.shipmentId) ?? "?"}` : null,
-        actualDate: ev.actualDate,
+        shipmentLabel: null,
+        actualDate: null,
         estimateDate,
-        eventId: ev.id,
+        eventId: null,
       };
-    })
-    .sort((a, b) => new Date(a.actualDate).getTime() - new Date(b.actualDate).getTime());
+    });
+
+  const rows: HistoryRow[] = [...eventRows, ...syntheticRows].sort((a, b) => {
+    // Sort by stage pipeline order first, then by actual date within same stage
+    const ai = stages.indexOf(a.stage);
+    const bi = stages.indexOf(b.stage);
+    if (ai !== bi) return ai - bi;
+    if (!a.actualDate) return -1;
+    if (!b.actualDate) return 1;
+    return new Date(a.actualDate).getTime() - new Date(b.actualDate).getTime();
+  });
 
   async function handleSaveDate(eventId: string) {
     if (!editDate) return;
@@ -2625,10 +3333,11 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
           </thead>
           <tbody className="divide-y divide-gray-100">
             {rows.map((row) => {
-              const variance = varianceLabel(row.actualDate, row.estimateDate);
-              const isEditing = editingId === row.eventId;
+              const variance = row.actualDate ? varianceLabel(row.actualDate, row.estimateDate) : null;
+              const isEditing = row.eventId && editingId === row.eventId;
+              const isSynthetic = row.eventId === null;
               return (
-                <tr key={row.key}>
+                <tr key={row.key} className={isSynthetic ? "opacity-50" : ""}>
                   <td className="px-4 py-2.5">
                     <div className="font-medium text-gray-900">{row.label}</div>
                     {row.dateLabel && <div className="text-xs text-gray-400">{row.dateLabel}</div>}
@@ -2644,7 +3353,7 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
                           onChange={(e) => setEditDate(e.target.value)}
                         />
                         <button
-                          onClick={() => handleSaveDate(row.eventId)}
+                          onClick={() => handleSaveDate(row.eventId!)}
                           disabled={saving}
                           className="text-xs font-medium text-gray-900 hover:underline disabled:opacity-50"
                         >
@@ -2654,6 +3363,8 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
                           Cancel
                         </button>
                       </div>
+                    ) : isSynthetic ? (
+                      <span className="text-gray-300 italic text-xs">date unknown</span>
                     ) : (
                       <button
                         onClick={() => {
@@ -2694,21 +3405,234 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
       <div className="text-xs text-gray-400">
         Full pipeline: {stages.map((s) => STAGE_LABELS[s]).join(" → ")}
       </div>
+
+      {po.dateRevisions.length > 0 && <DateRevisionsPanel revisions={po.dateRevisions} />}
     </div>
   );
 }
 
-function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
+const SHIPMENT_STATUS_STYLES: Record<string, { dot: string; edge: string; badge: string; label: string }> = {
+  SHIPPED: { dot: "bg-indigo-500", edge: "border-l-indigo-500", badge: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200", label: "Shipped" },
+  AT_CUSTOM: { dot: "bg-orange-500", edge: "border-l-orange-500", badge: "bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200", label: "At Custom Arrival" },
+  AT_CUSTOM_CLEARANCE: { dot: "bg-amber-500", edge: "border-l-amber-500", badge: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200", label: "Custom Clearance" },
+  RECEIVED: { dot: "bg-green-500", edge: "border-l-green-500", badge: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-200", label: "Received" },
+};
+
+function ReceivingModal({
+  po,
+  onClose,
+  onDone,
+}: {
+  po: PO;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const itemById = new Map(po.items.map((i) => [i.id, i]));
+  // Only show shipments that still need receiving — exclude fully confirmed ones
+  const selectable = po.shipments.filter((s) => {
+    if (s.status === "AT_CUSTOM_CLEARANCE") return true;
+    if (s.status === "RECEIVED" && !s.receivingConfirmed) {
+      return !s.items.every((line) => line.receivedQty >= line.shippedQty);
+    }
+    return false;
+  });
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = selectable.find((s) => s.id === selectedId) ?? null;
+
+  const shipmentIndex = (id: string) => po.shipments.findIndex((s) => s.id === id) + 1;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-10">
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          {selected ? (
+            <button onClick={() => setSelectedId(null)} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors">
+              <span>←</span> Back to shipment list
+            </button>
+          ) : (
+            <h2 className="text-base font-semibold text-gray-900">Select Shipment to Update</h2>
+          )}
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+        </div>
+
+        {!selected ? (
+          <div className="divide-y divide-gray-100">
+            {selectable.length === 0 && (
+              <div className="px-5 py-8 text-center text-sm text-gray-400">No shipments pending receiving.</div>
+            )}
+            {selectable.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSelectedId(s.id)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors text-left"
+              >
+                <div>
+                  <div className="text-sm font-medium text-gray-900">
+                    Shipment #{shipmentIndex(s.id)} — {fmtDate(s.shippingDate)}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    Shipped {s.shippedQty} · Received {s.receivedQty} · Remaining {s.shippedQty - s.receivedQty}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SHIPMENT_STATUS_STYLES[s.status]?.badge ?? ""}`}>
+                    {SHIPMENT_STATUS_STYLES[s.status]?.label ?? s.status}
+                  </span>
+                  <span className="text-gray-400">›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-sm font-medium text-gray-700">
+                Shipment #{shipmentIndex(selected.id)} — {fmtDate(selected.shippingDate)}
+              </span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SHIPMENT_STATUS_STYLES[selected.status]?.badge ?? ""}`}>
+                {SHIPMENT_STATUS_STYLES[selected.status]?.label ?? selected.status}
+              </span>
+            </div>
+            <ReceivingForm shipment={selected} itemById={itemById} poId={po.id} onDone={onDone} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DateRevisionsPanel({ revisions }: { revisions: DateRevision[] }) {
+  const [expandedFields, setExpandedFields] = useState<Set<string>>(new Set());
+
+  // Group by label, preserving insertion order (most-recent revisions first per group)
+  const groups: { label: string; latest: DateRevision; history: DateRevision[] }[] = [];
+  const seen = new Map<string, typeof groups[0]>();
+  for (const r of revisions) {
+    if (!seen.has(r.label)) {
+      const g = { label: r.label, latest: r, history: [] as DateRevision[] };
+      groups.push(g);
+      seen.set(r.label, g);
+    } else {
+      seen.get(r.label)!.history.push(r);
+    }
+  }
+
+  function toggle(label: string) {
+    setExpandedFields((prev) => {
+      const next = new Set(prev);
+      next.has(label) ? next.delete(label) : next.add(label);
+      return next;
+    });
+  }
+
+  return (
+    <div>
+      <h3 className="text-sm font-medium text-gray-700 mb-2">Estimate Date Revisions</h3>
+      <div className="bg-white rounded border divide-y divide-gray-100 text-sm">
+        {groups.map(({ label, latest, history }) => {
+          const expanded = expandedFields.has(label);
+          const total = 1 + history.length;
+          return (
+            <div key={label}>
+              <div className="flex items-center gap-3 px-4 py-2.5">
+                <div className="w-40 font-medium text-gray-800 shrink-0">{label}</div>
+                <div className="flex-1 text-gray-500 truncate">{latest.reason}</div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-gray-400 tabular-nums">
+                    {latest.fromDate ? fmtDate(latest.fromDate) : <span className="italic text-gray-300">none</span>}
+                    {" → "}
+                    <span className="text-gray-800 font-medium">{latest.toDate ? fmtDate(latest.toDate) : "—"}</span>
+                  </span>
+                  <span className="text-xs text-gray-400">{fmtDate(latest.createdAt)}</span>
+                  {total > 1 && (
+                    <button
+                      onClick={() => toggle(label)}
+                      className="text-xs text-blue-600 hover:text-blue-800 transition-colors w-16 text-right"
+                    >
+                      {expanded ? "Hide" : `+${history.length} more`}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {expanded && history.map((r) => (
+                <div key={r.id} className="flex items-center gap-3 px-4 py-2 bg-gray-50 border-t border-gray-100">
+                  <div className="w-40 shrink-0" />
+                  <div className="flex-1 text-gray-400 truncate text-xs">{r.reason}</div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-gray-400 tabular-nums text-xs">
+                      {r.fromDate ? fmtDate(r.fromDate) : <span className="italic">none</span>}
+                      {" → "}
+                      <span className="text-gray-600">{r.toDate ? fmtDate(r.toDate) : "—"}</span>
+                    </span>
+                    <span className="text-xs text-gray-400 w-16 text-right">{fmtDate(r.createdAt)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function CustomRateInput({ shipmentId, poId, shipmentItemId, value, onSaved }: { shipmentId: string; poId: string; shipmentItemId: string; value: number | null; onSaved: () => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  if (!editing) {
+    return (
+      <button
+        className="font-medium text-gray-700 hover:text-blue-600 underline-offset-2 hover:underline tabular-nums"
+        onClick={() => { setDraft(value != null ? String(value) : ""); setEditing(true); }}
+      >
+        {value != null ? value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : <span className="text-gray-400 italic text-xs">enter</span>}
+      </button>
+    );
+  }
+
+  async function save() {
+    setSaving(true);
+    await fetch(`/api/purchase-orders/${poId}/shipments/${shipmentId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customRates: [{ shipmentItemId, rate: draft === "" ? null : draft }] }),
+    });
+    setSaving(false);
+    setEditing(false);
+    await onSaved();
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input
+        autoFocus
+        type="number"
+        className="border rounded px-1.5 py-0.5 text-xs w-24 text-right"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+      />
+      <button onClick={save} disabled={saving} className="text-xs text-blue-600 hover:underline">{saving ? "…" : "Save"}</button>
+      <button onClick={() => setEditing(false)} className="text-xs text-gray-400 hover:underline">✕</button>
+    </span>
+  );
+}
+
+function ShippingTab({ po, onRefresh, customPoints }: { po: PO; onRefresh: () => Promise<void>; customPoints: string[] }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     shippingDate: new Date().toISOString().slice(0, 10),
     transportMode: "ROAD",
-    arrivalDate: "",
+    customPoint: "",
     notes: "",
   });
   const [lines, setLines] = useState<ShipmentLineForm[]>([]);
+  const [formFiles, setFormFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
 
   function alreadyShipped(itemId: string) {
     return po.shipments.reduce(
@@ -2721,10 +3645,11 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
     setForm({
       shippingDate: new Date().toISOString().slice(0, 10),
       transportMode: "ROAD",
-      arrivalDate: "",
+      customPoint: "",
       notes: "",
     });
     setLines([]);
+    setFormFiles([]);
     setError(null);
   }
 
@@ -2741,7 +3666,6 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
           specificName: item.specificName ?? "-",
           remaining,
           shippedQty: remaining > 0 ? String(remaining) : "",
-          receivedQty: "",
         };
       })
       .filter((l) => l.remaining > 0);
@@ -2774,13 +3698,19 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
           items: validLines.map((l) => ({
             poItemId: l.poItemId,
             shippedQty: l.shippedQty,
-            receivedQty: l.receivedQty,
+            receivedQty: "0",
           })),
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to add shipment");
+      }
+      const saved = await res.json();
+      for (const file of formFiles) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetch(`/api/purchase-orders/${po.id}/shipments/${saved.id}/attachments`, { method: "POST", body: fd });
       }
       resetForm();
       setShowForm(false);
@@ -2795,6 +3725,24 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
   async function handleDelete(shipmentId: string) {
     if (!confirm("Delete this shipment?")) return;
     await fetch(`/api/purchase-orders/${po.id}/shipments/${shipmentId}`, { method: "DELETE" });
+    await onRefresh();
+  }
+
+  async function handleAttachmentUpload(shipmentId: string, file: File) {
+    setUploadingFor(shipmentId);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      await fetch(`/api/purchase-orders/${po.id}/shipments/${shipmentId}/attachments`, { method: "POST", body: fd });
+      await onRefresh();
+    } finally {
+      setUploadingFor(null);
+    }
+  }
+
+  async function handleAttachmentDelete(shipmentId: string, attachmentId: string) {
+    if (!confirm("Remove this attachment?")) return;
+    await fetch(`/api/purchase-orders/${po.id}/shipments/${shipmentId}/attachments?attachmentId=${attachmentId}`, { method: "DELETE" });
     await onRefresh();
   }
 
@@ -2865,16 +3813,56 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
               <select className="input" value={form.transportMode} onChange={(e) => setForm({ ...form, transportMode: e.target.value })}>
                 <option value="ROAD">Road</option>
                 <option value="AIRWAY">Airway</option>
+                <option value="SEA">Sea / Waterway</option>
               </select>
             </label>
             <label className="block">
-              <span className="block text-xs font-medium text-gray-500 mb-1">Expected Arrival</span>
-              <input type="date" className="input" value={form.arrivalDate} onChange={(e) => setForm({ ...form, arrivalDate: e.target.value })} />
+              <span className="block text-xs font-medium text-gray-500 mb-1">Custom Point</span>
+              <select className="input" value={form.customPoint} onChange={(e) => setForm({ ...form, customPoint: e.target.value })}>
+                <option value="">— None —</option>
+                {customPoints.map((cp) => <option key={cp} value={cp}>{cp}</option>)}
+              </select>
             </label>
-            <label className="block col-span-3">
+            <label className="block col-span-2">
               <span className="block text-xs font-medium text-gray-500 mb-1">Notes</span>
               <input className="input" placeholder="Optional" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </label>
+            {form.shippingDate && (() => {
+              const base = new Date(form.shippingDate);
+              const transit = form.transportMode === "AIRWAY" ? 15 : form.transportMode === "SEA" ? 50 : 30;
+              const addD = (d: Date, n: number) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
+              const fmt = (d: Date) => d.toISOString().slice(0, 10);
+              const customArrival = addD(base, transit);
+              const customClearance = addD(customArrival, 5);
+              const arrival = addD(customClearance, 5);
+              return (
+                <div className="col-span-3 flex gap-5 text-xs bg-blue-50 border border-blue-100 rounded-md px-3 py-2 text-blue-700">
+                  <span><span className="text-blue-400">Est. Custom Arrival</span> <span className="font-medium">{fmt(customArrival)}</span></span>
+                  <span><span className="text-blue-400">Est. Custom Clearance</span> <span className="font-medium">{fmt(customClearance)}</span></span>
+                  <span><span className="text-blue-400">Est. Arrival</span> <span className="font-medium">{fmt(arrival)}</span></span>
+                </div>
+              );
+            })()}
+            <div className="block">
+              <span className="block text-xs font-medium text-gray-500 mb-1">Packing List / Documents</span>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                multiple
+                className="text-sm"
+                onChange={(e) => setFormFiles(Array.from(e.target.files ?? []))}
+              />
+              {formFiles.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {formFiles.map((f, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 text-xs bg-gray-100 border rounded px-1.5 py-0.5">
+                      {f.name}
+                      <button type="button" onClick={() => setFormFiles(formFiles.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-600">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center justify-between pt-1">
@@ -2892,7 +3880,6 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
                   <th className="px-3 py-2 font-medium">Item</th>
                   <th className="px-3 py-2 font-medium text-right">Remaining</th>
                   <th className="px-3 py-2 font-medium">Shipped Qty</th>
-                  <th className="px-3 py-2 font-medium">Received Qty</th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
@@ -2912,15 +3899,6 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        min="0"
-                        className="input"
-                        value={l.receivedQty}
-                        onChange={(e) => updateLine(l.poItemId, { receivedQty: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
                       <button type="button" onClick={() => removeLine(l.poItemId)} className="text-red-600 hover:underline text-xs font-medium">
                         Remove
                       </button>
@@ -2929,7 +3907,7 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
                 ))}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-gray-400 text-xs">
+                    <td colSpan={5} className="px-3 py-6 text-center text-gray-400 text-xs">
                       No items added. Use &ldquo;Pull Remaining Items from PO&rdquo; or add them manually.
                     </td>
                   </tr>
@@ -2957,10 +3935,11 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
             onDelete={() => handleDelete(s.id)}
             onRollback={() => handleRollbackShipment(s.id, s.status === "RECEIVED" ? "At Custom" : "Shipped")}
             poId={po.id}
-            onReceivingDone={() => {
-              setReceivingId(null);
-              onRefresh();
-            }}
+            onReceivingDone={() => { setReceivingId(null); onRefresh(); }}
+            onAttachmentUpload={(file) => handleAttachmentUpload(s.id, file)}
+            onAttachmentDelete={(attId) => handleAttachmentDelete(s.id, attId)}
+            uploadingAttachment={uploadingFor === s.id}
+            onRefresh={onRefresh}
           />
         ))}
         {po.shipments.length === 0 && (
@@ -2973,12 +3952,6 @@ function ShippingTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void>
     </div>
   );
 }
-
-const SHIPMENT_STATUS_STYLES: Record<string, { dot: string; edge: string; badge: string; label: string }> = {
-  SHIPPED: { dot: "bg-indigo-500", edge: "border-l-indigo-500", badge: "bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200", label: "Shipped" },
-  AT_CUSTOM: { dot: "bg-orange-500", edge: "border-l-orange-500", badge: "bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200", label: "At Custom" },
-  RECEIVED: { dot: "bg-green-500", edge: "border-l-green-500", badge: "bg-green-50 text-green-700 ring-1 ring-inset ring-green-200", label: "Received" },
-};
 
 // A single shipment/packing-list card. A left accent stripe carries the
 // stage color so the list reads as a scannable timeline rather than a wall
@@ -2994,6 +3967,10 @@ function ShipmentCard({
   onRollback,
   poId,
   onReceivingDone,
+  onAttachmentUpload,
+  onAttachmentDelete,
+  uploadingAttachment,
+  onRefresh,
 }: {
   shipment: Shipment;
   index: number;
@@ -3004,12 +3981,31 @@ function ShipmentCard({
   onRollback: () => void;
   poId: string;
   onReceivingDone: () => void;
+  onAttachmentUpload: (file: File) => void;
+  onAttachmentDelete: (attId: string) => void;
+  uploadingAttachment: boolean;
+  onRefresh: () => Promise<void>;
 }) {
   const style = SHIPMENT_STATUS_STYLES[s.status] ?? SHIPMENT_STATUS_STYLES.SHIPPED;
   const totalReceived = s.items.reduce((sum, line) => sum + line.receivedQty, 0);
   const isShort = s.status === "RECEIVED" && totalReceived < s.shippedQty;
   const [showDetails, setShowDetails] = useState(false);
-  const rollbackLabel = s.status === "RECEIVED" ? "At Custom" : s.status === "AT_CUSTOM" ? "Shipped" : null;
+  const rollbackLabel = s.status === "RECEIVED" ? "Custom Clearance" : s.status === "AT_CUSTOM_CLEARANCE" ? "At Custom Arrival" : s.status === "AT_CUSTOM" ? "Shipped" : null;
+  const [editingRemarks, setEditingRemarks] = useState(false);
+  const [remarksValue, setRemarksValue] = useState(s.notes ?? "");
+  const [savingRemarks, setSavingRemarks] = useState(false);
+
+  async function saveRemarks() {
+    setSavingRemarks(true);
+    await fetch(`/api/purchase-orders/${poId}/shipments/${s.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: remarksValue }),
+    });
+    setSavingRemarks(false);
+    setEditingRemarks(false);
+    await onRefresh();
+  }
 
   return (
     <div className={`bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm border-l-4 ${style.edge}`}>
@@ -3038,9 +4034,11 @@ function ShipmentCard({
               ← Undo to {rollbackLabel}
             </button>
           )}
-          <button onClick={onToggleReceiving} className="font-medium text-gray-600 hover:text-gray-900 transition-colors">
-            {isReceiving ? "Close" : "Update Receiving"}
-          </button>
+          {(s.status === "AT_CUSTOM_CLEARANCE" || s.status === "RECEIVED") && (
+            <button onClick={onToggleReceiving} className="font-medium text-gray-600 hover:text-gray-900 transition-colors">
+              {isReceiving ? "Close" : "Update Receiving"}
+            </button>
+          )}
           <button onClick={onDelete} className="font-medium text-red-500 hover:text-red-700 transition-colors">
             Delete
           </button>
@@ -3048,7 +4046,7 @@ function ShipmentCard({
       </div>
 
       <div className="px-4 pb-3 flex items-center gap-5 text-sm text-gray-500 flex-wrap">
-        <span>{s.transportMode === "AIRWAY" ? "✈ Airway" : "🚚 Road"}</span>
+        <span>{s.transportMode === "AIRWAY" ? "✈ Airway" : s.transportMode === "SEA" ? "🚢 Sea" : "🚚 Road"}</span>
         <span className="tabular-nums">
           <span className="text-gray-400">Shipped</span> <span className="font-medium text-gray-700">{s.shippedQty}</span>
         </span>
@@ -3059,7 +4057,76 @@ function ShipmentCard({
         <span>
           <span className="text-gray-400">Arrival</span> {fmtDate(s.arrivalDate)}
         </span>
-        {s.notes && <span className="text-gray-400 italic truncate max-w-xs">&ldquo;{s.notes}&rdquo;</span>}
+        {s.customPoint && (
+          <span>
+            <span className="text-gray-400">Custom</span> <span className="font-medium text-gray-700">{s.customPoint}</span>
+          </span>
+        )}
+        {editingRemarks ? (
+          <span className="flex items-center gap-1.5">
+            <input
+              autoFocus
+              className="border rounded px-2 py-0.5 text-xs w-56"
+              value={remarksValue}
+              onChange={(e) => setRemarksValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveRemarks(); if (e.key === "Escape") setEditingRemarks(false); }}
+              placeholder="Add remarks…"
+            />
+            <button onClick={saveRemarks} disabled={savingRemarks} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+              {savingRemarks ? "Saving…" : "Save"}
+            </button>
+            <button onClick={() => { setEditingRemarks(false); setRemarksValue(s.notes ?? ""); }} className="text-xs text-gray-400 hover:text-gray-700">Cancel</button>
+          </span>
+        ) : (
+          <span className="flex items-center gap-1">
+            {s.notes
+              ? <span className="text-gray-400 italic truncate max-w-xs">&ldquo;{s.notes}&rdquo;</span>
+              : <span className="text-gray-300 text-xs">no remarks</span>
+            }
+            <button onClick={() => { setRemarksValue(s.notes ?? ""); setEditingRemarks(true); }} className="text-gray-300 hover:text-gray-600 text-xs ml-0.5" title="Edit remarks">✎</button>
+          </span>
+        )}
+      </div>
+
+      {/* Per-shipment estimated / actual milestone dates */}
+      <div className="px-4 pb-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-500">
+        <span>
+          <span className="text-gray-400">Est. Custom Arrival</span>{" "}
+          <span className={s.actualCustomArrivalDate ? "line-through text-gray-300" : "font-medium text-gray-700"}>{fmtDate(s.estCustomArrivalDate)}</span>
+          {s.actualCustomArrivalDate && <span className="ml-1 font-medium text-green-700">{fmtDate(s.actualCustomArrivalDate)} ✓</span>}
+        </span>
+        <span>
+          <span className="text-gray-400">Est. Custom Clearance</span>{" "}
+          <span className={s.actualCustomDate ? "line-through text-gray-300" : "font-medium text-gray-700"}>{fmtDate(s.estCustomClearanceDate)}</span>
+          {s.actualCustomDate && <span className="ml-1 font-medium text-green-700">{fmtDate(s.actualCustomDate)} ✓</span>}
+        </span>
+        <span>
+          <span className="text-gray-400">Est. Arrival</span>{" "}
+          <span className="font-medium text-gray-700">{fmtDate(s.estArrivalDate)}</span>
+        </span>
+      </div>
+
+      <div className="px-4 pb-3 flex flex-wrap gap-1 items-center">
+        <div className="flex flex-wrap gap-1 items-center ml-auto">
+          {(s.attachments ?? []).map((a) => (
+            <span key={a.id} className="inline-flex items-center gap-1 text-xs bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
+              <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline max-w-[120px] truncate" title={a.fileName}>
+                {a.mimeType === "application/pdf" ? "📄" : "🖼"} {a.fileName}
+              </a>
+              <button onClick={() => onAttachmentDelete(a.id)} className="text-red-400 hover:text-red-600 ml-0.5" title="Remove">×</button>
+            </span>
+          ))}
+          <label className={`cursor-pointer text-xs text-gray-500 hover:text-gray-800 border rounded px-1.5 py-0.5 ${uploadingAttachment ? "opacity-50" : ""}`}>
+            {uploadingAttachment ? "Uploading…" : "+ Packing List"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              className="hidden"
+              disabled={uploadingAttachment}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onAttachmentUpload(f); e.target.value = ""; }}
+            />
+          </label>
+        </div>
         <button
           onClick={() => setShowDetails((v) => !v)}
           className="ml-auto text-xs font-medium text-gray-500 hover:text-gray-900 transition-colors"
@@ -3077,6 +4144,7 @@ function ShipmentCard({
                 <th className="px-4 py-2 font-medium">Item</th>
                 <th className="px-4 py-2 font-medium text-right">Shipped</th>
                 <th className="px-4 py-2 font-medium text-right">Received</th>
+                {s.actualCustomDate && <th className="px-4 py-2 font-medium text-right">Custom Rate/Unit (NPR)</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -3091,6 +4159,17 @@ function ShipmentCard({
                     <td className={`px-4 py-2.5 text-right tabular-nums ${lineShort ? "text-orange-600 font-semibold" : "text-gray-700 font-medium"}`}>
                       {line.receivedQty || "-"}
                     </td>
+                    {s.actualCustomDate && (
+                      <td className="px-4 py-2.5 text-right">
+                        <CustomRateInput
+                          shipmentId={s.id}
+                          poId={poId}
+                          shipmentItemId={line.id}
+                          value={line.actualCustomRateNPR}
+                          onSaved={onRefresh}
+                        />
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -3236,6 +4315,83 @@ function AttachmentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<vo
             )}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function NotesTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/purchase-orders/${po.id}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save note");
+      }
+      setText("");
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save note");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(noteId: string) {
+    if (!confirm("Delete this note?")) return;
+    await fetch(`/api/purchase-orders/${po.id}/notes/${noteId}`, { method: "DELETE" });
+    await onRefresh();
+  }
+
+  return (
+    <div className="space-y-4">
+      <form onSubmit={handleSubmit} className="bg-white border rounded p-4 space-y-2">
+        <textarea
+          className="input w-full min-h-[100px] resize-y"
+          placeholder="Add a note or update about this PO — production status, supplier communication, issues, etc."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        {error && <div className="text-sm text-red-600">{error}</div>}
+        <button
+          type="submit"
+          disabled={saving || !text.trim()}
+          className="rounded bg-gray-900 text-white text-sm px-4 py-2 hover:bg-gray-700 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Post Note"}
+        </button>
+      </form>
+
+      <div className="space-y-3">
+        {po.poNotes.length === 0 && (
+          <div className="text-center text-gray-400 text-sm py-8">No notes yet.</div>
+        )}
+        {po.poNotes.map((n) => (
+          <div key={n.id} className="bg-white border rounded p-4">
+            <div className="flex items-start justify-between gap-4">
+              <p className="text-sm text-gray-800 whitespace-pre-wrap flex-1">{n.content}</p>
+              <button
+                onClick={() => handleDelete(n.id)}
+                className="text-xs text-red-400 hover:text-red-600 shrink-0"
+              >
+                Delete
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-gray-400">{fmtDate(n.createdAt)}</div>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { STAGE_LABELS, shipmentBreakdownLabel, type Stage } from "@/lib/poStages";
+import SkuSearch from "@/components/SkuSearch";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,8 @@ export default async function DashboardPage() {
           value={`¥${totalPendingBalanceRMB.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
         />
       </div>
+
+      <SkuSearch />
 
       {overdue.length > 0 && (
         <div className="bg-white border border-red-200 rounded p-4">

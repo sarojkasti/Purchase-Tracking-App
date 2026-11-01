@@ -4,6 +4,20 @@ import { buildPOItemData } from "@/lib/poItemData";
 import { upsertProductFromItem } from "@/lib/productUpsert";
 import { recalcPoTotals } from "@/lib/poTotals";
 
+async function detectOrderType(newmewSku: string | null, chineseSku: string | null, excludeItemId?: string): Promise<string> {
+  if (!newmewSku && !chineseSku) return "New Order";
+  const existing = await prisma.pOItem.findFirst({
+    where: {
+      ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
+      OR: [
+        newmewSku ? { newmewSku } : {},
+        chineseSku ? { chineseSku } : {},
+      ].filter((c) => Object.keys(c).length > 0),
+    },
+  });
+  return existing ? "Reorder" : "New Order";
+}
+
 type BatchBody = {
   updates?: { itemId: string; data: Record<string, unknown> }[];
   creates?: Record<string, unknown>[];
@@ -25,6 +39,22 @@ export async function POST(
   const deletes = body.deletes ?? [];
   const updates = body.updates ?? [];
   const creates = body.creates ?? [];
+
+  // Reject saves that would leave the PO with mixed mfgTypes — a PO is either
+  // entirely Ready Goods or entirely Production; mixing them breaks date estimates.
+  const existingItems = await prisma.pOItem.findMany({ where: { poId }, select: { id: true, mfgType: true } });
+  const surviving = existingItems.filter((i) => !deletes.includes(i.id));
+  const allMfgTypes = [
+    ...surviving.map((i) => updates.find((u) => u.itemId === i.id)?.data?.mfgType ?? i.mfgType),
+    ...creates.map((c) => c.mfgType),
+  ].filter(Boolean) as string[];
+  const uniqueTypes = new Set(allMfgTypes);
+  if (uniqueTypes.size > 1) {
+    return NextResponse.json(
+      { error: "All items in a PO must be the same manufacturing type (Ready Goods or Production). Mixed types are not allowed." },
+      { status: 400 }
+    );
+  }
 
   if (deletes.length > 0) {
     await prisma.pOItem.deleteMany({ where: { id: { in: deletes }, poId } });
@@ -54,6 +84,7 @@ export async function POST(
 
   for (const c of creates) {
     const data = buildPOItemData(c);
+    data.orderType = await detectOrderType(data.newmewSku ?? null, data.chineseSku ?? null);
     const item = await prisma.pOItem.create({ data: { ...data, poId } });
     await upsertProductFromItem({
       chineseSku: item.chineseSku,

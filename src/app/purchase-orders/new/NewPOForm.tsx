@@ -29,6 +29,11 @@ type Vendor = {
   agentId: string | null;
 };
 
+type Agent = {
+  id: string;
+  name: string;
+};
+
 type PaymentPolicy = {
   advancePercent: number;
   advanceOn: string;
@@ -88,16 +93,20 @@ const itemAmountRMB = pricingAmount;
 
 export default function NewPOForm({
   vendors,
+  agents,
   itemTypes,
   brands,
+  genders,
   frontMaterials,
   templeMaterials,
   lensMaterials,
   colors,
 }: {
   vendors: Vendor[];
+  agents: Agent[];
   itemTypes: string[];
   brands: string[];
+  genders: string[];
   frontMaterials: string[];
   templeMaterials: string[];
   lensMaterials: string[];
@@ -110,9 +119,11 @@ export default function NewPOForm({
   const newErrs = (row: ItemRow) => highlightedFields(row, showErrors, !isRowInUse(row));
 
   const [vendorId, setVendorId] = useState(vendors[0]?.id ?? "");
+  const [agentId, setAgentId] = useState("");
   const [poSuffix, setPoSuffix] = useState("");
   const [suffixLoading, setSuffixLoading] = useState(false);
   const [piNumber, setPiNumber] = useState("");
+  const [piFile, setPiFile] = useState<File | null>(null);
   const [orderDateAD, setOrderDateAD] = useState(new Date().toISOString().slice(0, 10));
   const [transportMode, setTransportMode] = useState("ROAD");
   const [remarks, setRemarks] = useState("");
@@ -292,6 +303,7 @@ export default function NewPOForm({
           poNumber,
           piNumber,
           vendorId,
+          agentId: agentId || null,
           orderDateAD,
           transportMode,
           unitsOrdered: unitsOrderedTotal,
@@ -308,8 +320,17 @@ export default function NewPOForm({
           items: validItems,
         }),
       });
-      if (!res.ok) throw new Error("Failed to create purchase order");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? "Failed to create purchase order");
+      }
       const po = await res.json();
+      if (piFile) {
+        const fd = new FormData();
+        fd.append("file", piFile);
+        fd.append("type", "PI");
+        await fetch(`/api/purchase-orders/${po.id}/attachments`, { method: "POST", body: fd });
+      }
       router.push(`/purchase-orders/${po.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -343,6 +364,22 @@ export default function NewPOForm({
       </div>
 
       <div className="grid grid-cols-3 gap-4">
+        <Field label="Agent">
+          <select className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+            <option value="">— use vendor default —</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          {!agentId && vendor?.agentId && (
+            <p className="text-xs text-gray-400 mt-1">
+              Default: {agents.find((a) => a.id === vendor.agentId)?.name ?? vendor.agentId}
+            </p>
+          )}
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
         <Field label="CHN PI No" required>
           <input
             className="input"
@@ -350,6 +387,34 @@ export default function NewPOForm({
             onChange={(e) => setPiNumber(e.target.value)}
             required
           />
+        </Field>
+        <Field label="PI Document (optional)">
+          <div className="flex items-center gap-2">
+            <label className="flex-1 cursor-pointer">
+              <span className="input block truncate text-gray-500 hover:bg-gray-50">
+                {piFile ? piFile.name : "Choose file…"}
+              </span>
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx"
+                className="sr-only"
+                onChange={(e) => setPiFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            {piFile && (
+              <button
+                type="button"
+                onClick={() => setPiFile(null)}
+                className="text-red-500 hover:text-red-700 text-xs shrink-0"
+                title="Remove"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {piFile && (
+            <p className="text-xs text-gray-400 mt-1">Will be saved to Attachments tab as PI.</p>
+          )}
         </Field>
         <Field label="Order Date" required>
           <input
@@ -367,6 +432,7 @@ export default function NewPOForm({
           <select className="input" value={transportMode} onChange={(e) => setTransportMode(e.target.value)}>
             <option value="ROAD">Road</option>
             <option value="AIRWAY">Airway</option>
+            <option value="SEA">Sea / Waterway</option>
           </select>
         </Field>
         <Field label="Units Ordered (auto-summed from items)">
@@ -404,6 +470,7 @@ export default function NewPOForm({
                 <th className="px-2 py-1.5 min-w-[7rem]">Temple <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
+                <th className="px-2 py-1.5 min-w-[7rem]">Gender</th>
                 <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
@@ -489,6 +556,13 @@ export default function NewPOForm({
                       className="input bg-gray-50"
                       value={deriveCategory(item.front, item.temple, item.lens)}
                       disabled
+                    />
+                  </td>
+                  <td className="px-1 py-1 align-top">
+                    <SearchSelect
+                      value={item.gender}
+                      options={strOptions(genders)}
+                      onChange={(v) => updateItem(idx, { gender: v })}
                     />
                   </td>
                   <td className={`px-1 py-1 align-top ${newErrs(item).has("colors") ? "field-invalid" : ""}`}>

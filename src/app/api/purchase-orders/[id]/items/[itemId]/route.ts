@@ -4,6 +4,20 @@ import { recalcPoTotals } from "@/lib/poTotals";
 import { upsertProductFromItem } from "@/lib/productUpsert";
 import { buildPOItemData } from "@/lib/poItemData";
 
+async function detectOrderType(newmewSku: string | null, chineseSku: string | null, excludeItemId?: string): Promise<string> {
+  if (!newmewSku && !chineseSku) return "New Order";
+  const existing = await prisma.pOItem.findFirst({
+    where: {
+      ...(excludeItemId ? { id: { not: excludeItemId } } : {}),
+      OR: [
+        newmewSku ? { newmewSku } : {},
+        chineseSku ? { chineseSku } : {},
+      ].filter((c) => Object.keys(c).length > 0),
+    },
+  });
+  return existing ? "Reorder" : "New Order";
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
@@ -16,6 +30,14 @@ export async function PUT(
   void _ignored;
   void _shippedIgnored;
   void _receivedIgnored;
+
+  // Auto-detect only when SKU fields are being updated and no explicit orderType sent
+  if (!data.orderType && (data.newmewSku !== undefined || data.chineseSku !== undefined)) {
+    const current = await prisma.pOItem.findUnique({ where: { id: itemId }, select: { newmewSku: true, chineseSku: true } });
+    const sku = data.newmewSku ?? current?.newmewSku ?? null;
+    const csku = data.chineseSku ?? current?.chineseSku ?? null;
+    data.orderType = await detectOrderType(sku, csku, itemId);
+  }
 
   const item = await prisma.pOItem.update({
     where: { id: itemId },

@@ -56,6 +56,15 @@ export async function POST(req: NextRequest) {
   const orderDateBS = adToBs(orderDateAD);
 
   const items: NewItemInput[] = Array.isArray(body.items) ? body.items : [];
+
+  const itemMfgTypes = new Set(items.map((i) => i.mfgType).filter(Boolean));
+  if (itemMfgTypes.size > 1) {
+    return NextResponse.json(
+      { error: "All items in a PO must be the same manufacturing type (Ready Goods or Production). Mixed types are not allowed." },
+      { status: 400 }
+    );
+  }
+
   const unitsOrderedFromItems = items.reduce(
     (s, i) => s + (parseInt(String(i.unitsOrdered)) || 0),
     0
@@ -70,6 +79,7 @@ export async function POST(req: NextRequest) {
       poNumber: body.poNumber,
       piNumber: body.piNumber || null,
       vendorId: body.vendorId,
+      agentId: body.agentId || null,
       orderDateAD,
       orderDateBS,
       transportMode: body.transportMode || "ROAD",

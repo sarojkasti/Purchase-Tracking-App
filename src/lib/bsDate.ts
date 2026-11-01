@@ -38,3 +38,18 @@ export function bsMonthName(date: Date | null | undefined): string | null {
     return null;
   }
 }
+
+const WEEK_ORDINALS = ["First", "Second", "Third", "Fourth"];
+
+export function bsWeekLabel(date: Date | null | undefined): string | null {
+  if (!date) return null;
+  try {
+    const nd = new NepaliDate(date);
+    const month = nd.format("MMMM");
+    const day = parseInt(nd.format("DD"), 10);
+    const weekIndex = Math.min(3, Math.floor((day - 1) / 7));
+    return `${month} ${WEEK_ORDINALS[weekIndex]} Week`;
+  } catch {
+    return null;
+  }
+}

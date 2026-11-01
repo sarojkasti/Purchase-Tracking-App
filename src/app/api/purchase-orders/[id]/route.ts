@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { adToBs } from "@/lib/bsDate";
+import { adToBs, bsWeekLabel } from "@/lib/bsDate";
 import { recalcPoTotals, recalcOrderStatus } from "@/lib/poTotals";
 
 export async function GET(
@@ -13,13 +13,18 @@ export async function GET(
     include: {
       vendor: true,
       items: true,
-      payments: { orderBy: { paymentDate: "asc" } },
+      payments: { orderBy: { paymentDate: "asc" }, include: { advices: { orderBy: { uploadedAt: "asc" } } } },
       shipments: {
         orderBy: { shippingDate: "asc" },
-        include: { items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } } },
+        include: {
+          items: { include: { receivingEvents: { orderBy: { receivedDate: "asc" } } } },
+          attachments: { orderBy: { uploadedAt: "asc" } },
+        },
       },
       attachments: { orderBy: { uploadedAt: "desc" } },
       stageEvents: { orderBy: { actualDate: "asc" } },
+      poNotes: { orderBy: { createdAt: "desc" } },
+      dateRevisions: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!po) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -35,6 +40,32 @@ export async function PUT(
 
   const orderDateAD = body.orderDateAD ? new Date(body.orderDateAD) : undefined;
 
+  // Validate actual date chain: each stage cannot precede its upstream date.
+  // Read current PO to fill in dates not present in this request.
+  const current = await prisma.purchaseOrder.findUnique({ where: { id } });
+  if (current) {
+    const resolve = (bodyKey: string, currentVal: Date | null) =>
+      body[bodyKey] ? new Date(body[bodyKey]) : currentVal;
+    const orderD    = orderDateAD ?? current.orderDateAD;
+    const goodsD    = resolve("actualGoodCompletionDate",  current.actualGoodCompletionDate);
+    const shipD     = resolve("actualFactoryShipmentDate", current.actualFactoryShipmentDate);
+    const customArrD = resolve("actualCustomArrivalDate",  current.actualCustomArrivalDate ?? null);
+    const customD   = resolve("actualCustomDate",          current.actualCustomDate);
+    const arrivalD  = resolve("actualArrivalDateAD",       current.actualArrivalDateAD);
+    const checks: [Date | null, Date | null, string][] = [
+      [orderD,    goodsD,     "Goods completion cannot be before order date"],
+      [goodsD,    shipD,      "Factory shipment cannot be before goods completion"],
+      [shipD,     customArrD, "Custom arrival cannot be before factory shipment"],
+      [customArrD,customD,    "Custom clearance cannot be before custom arrival"],
+      [customD,   arrivalD,   "Nepal arrival cannot be before custom clearance"],
+    ];
+    for (const [from, to, msg] of checks) {
+      if (from && to && to < from) {
+        return NextResponse.json({ error: msg }, { status: 400 });
+      }
+    }
+  }
+
   // Hold/cancelled are independent flags layered on top of the pipeline
   // stage (see poStages.ts); clearing either resumes at the same stage
   // instead of losing the PO's position.
@@ -47,6 +78,7 @@ export async function PUT(
       poNumber: body.poNumber,
       piNumber: body.piNumber !== undefined ? body.piNumber || null : undefined,
       vendorId: body.vendorId,
+      agentId: body.agentId !== undefined ? body.agentId || null : undefined,
       orderDateAD,
       orderDateBS: orderDateAD ? adToBs(orderDateAD) : undefined,
       onHold,
@@ -121,12 +153,45 @@ export async function PUT(
       actualArrivalDateAD: body.actualArrivalDateAD
         ? new Date(body.actualArrivalDateAD)
         : undefined,
-      actualArrivalWeek: body.actualArrivalWeek || undefined,
+      estArrivalWeek: body.estArrivalWeek !== undefined ? body.estArrivalWeek || null
+        : body.estArrivalDateAD ? bsWeekLabel(new Date(body.estArrivalDateAD)) : undefined,
+      actualArrivalWeek: body.actualArrivalWeek !== undefined ? body.actualArrivalWeek || null
+        : body.actualArrivalDateAD ? bsWeekLabel(new Date(body.actualArrivalDateAD)) : undefined,
       discrepancyDays: body.discrepancyDays !== undefined ? parseInt(body.discrepancyDays) : undefined,
       remarks: body.remarks,
       sourceLink: body.sourceLink,
     },
   });
+
+  // Keep PO-level StageEvents in sync with the actual date fields so the
+  // history timeline always reflects what's saved in the process section.
+  // (No DB unique constraint on nullable shipmentId, so we do findFirst+update/create.)
+  async function syncStageEvent(stage: string, date: Date) {
+    const existing = await prisma.stageEvent.findFirst({ where: { poId: id, stage, shipmentId: null } });
+    if (existing) {
+      await prisma.stageEvent.update({ where: { id: existing.id }, data: { actualDate: date } });
+    } else {
+      await prisma.stageEvent.create({ data: { poId: id, stage, actualDate: date } });
+    }
+  }
+  // Log a revision record when estGoodCompletionDate is manually changed with a reason
+  if (body.estGoodCompletionDate && body.estGoodCompletionDateReason && current) {
+    await prisma.pODateRevision.create({
+      data: {
+        poId: id,
+        field: "estGoodCompletionDate",
+        label: "Est. Good Completion",
+        fromDate: current.estGoodCompletionDate,
+        toDate: new Date(body.estGoodCompletionDate),
+        reason: body.estGoodCompletionDateReason,
+      },
+    });
+  }
+
+  if (body.actualGoodCompletionDate) await syncStageEvent("GOODS_COMPLETED", new Date(body.actualGoodCompletionDate));
+  if (body.actualFactoryShipmentDate) await syncStageEvent("SHIPPED", new Date(body.actualFactoryShipmentDate));
+  if (body.actualCustomDate) await syncStageEvent("CUSTOM", new Date(body.actualCustomDate));
+  if (body.actualArrivalDateAD) await syncStageEvent("RECEIVED", new Date(body.actualArrivalDateAD));
 
   const affectsEstimates = [
     "orderDateAD",
@@ -141,6 +206,7 @@ export async function PUT(
     "actualGoodCompletionDate",
     "estFactoryShipmentDate",
     "actualFactoryShipmentDate",
+    "transportMode",
   ].some((k) => body[k] !== undefined);
   if (affectsEstimates) {
     await recalcPoTotals(id);
