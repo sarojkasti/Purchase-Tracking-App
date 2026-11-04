@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 
 type PoRow = {
+  id: string;
   poNumber: string;
   piNumber: string | null;
   piAttachmentUrl: string | null;
@@ -71,6 +72,16 @@ type PoRow = {
   actualArrivalDateAD: string | null;
   actualArrivalWeek: string | null;
 
+  shipments: {
+    id: string;
+    shippingDate: string | null;
+    arrivalDate: string | null;
+    shippedQty: number;
+    receivedQty: number;
+    status: string;
+    transportMode: string;
+    customPoint: string | null;
+  }[];
 };
 
 const columns: { key: keyof PoRow; label: string; date?: boolean }[] = [
@@ -412,19 +423,28 @@ export default function PosReportClient() {
               <tr key={idx} className="border-t hover:bg-gray-50">
                 {columns.map((col) => (
                   <td key={col.key} className={`px-3 py-2${typeof row[col.key] === "number" ? " text-right tabular-nums" : ""}`}>
-                    {col.key === "poNumber" && row.piAttachmentUrl ? (
+                    {col.key === "poNumber" ? (
                       <span className="inline-flex items-center gap-1">
                         {fmtCell(row, col.key, col.date)}
-                        <a
-                          href={row.piAttachmentUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open PI"
-                          className="text-blue-500 hover:text-blue-700 shrink-0"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          📎
-                        </a>
+                        {row.piAttachmentUrl ? (
+                          <a
+                            href={row.piAttachmentUrl.startsWith("http") ? row.piAttachmentUrl : `/api/file-view?path=${encodeURIComponent(row.piAttachmentUrl)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open PI"
+                            className="text-blue-500 hover:text-blue-700 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >📎</a>
+                        ) : (
+                          <a
+                            href={`/purchase-orders/${row.id}?tab=attachments`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="No PI — upload one"
+                            className="text-gray-300 hover:text-gray-500 shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >📎</a>
+                        )}
                       </span>
                     ) : (
                       fmtCell(row, col.key, col.date)

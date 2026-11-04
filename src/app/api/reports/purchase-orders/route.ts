@@ -35,7 +35,7 @@ export async function GET() {
     include: {
       vendor: { include: { agent: true } },
       items: { select: { brand: true, amountRMB: true, amountNPR: true, gender: true, itemType: true, unitsOrdered: true } },
-      shipments: { select: { status: true, shippedQty: true, arrivalDate: true, items: { select: { actualCustomRateNPR: true, receivedQty: true, receivingEvents: { select: { receivedDate: true } } } } } },
+      shipments: { select: { id: true, shippingDate: true, status: true, shippedQty: true, arrivalDate: true, transportMode: true, customPoint: true, items: { select: { actualCustomRateNPR: true, receivedQty: true, receivingEvents: { select: { receivedDate: true } } } } }, orderBy: { shippingDate: "asc" } },
       attachments: { where: { type: "PI" }, select: { url: true, fileName: true }, orderBy: { uploadedAt: "asc" }, take: 1 },
     },
     orderBy: { orderDateAD: "desc" },
@@ -68,6 +68,7 @@ export async function GET() {
     const effectivePaidBalanceNPR = po.paidBalanceNPR + advanceOverpaidNPR;
 
     return {
+    id: po.id,
     poNumber: po.poNumber,
     piNumber: po.piNumber,
     piAttachmentUrl: po.attachments[0]?.url ?? null,
@@ -154,6 +155,16 @@ export async function GET() {
     discrepancyDays: po.discrepancyDays,
     remarks: po.remarks,
     sourceLink: po.sourceLink,
+    shipments: po.shipments.map(s => ({
+      id: s.id,
+      shippingDate: s.shippingDate,
+      arrivalDate: s.arrivalDate,
+      shippedQty: s.shippedQty,
+      receivedQty: s.items.reduce((sum, i) => sum + i.receivedQty, 0),
+      status: s.status,
+      transportMode: s.transportMode,
+      customPoint: s.customPoint,
+    })),
     };
   }));
 

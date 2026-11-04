@@ -21,7 +21,7 @@ export default function SkuSearch() {
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (query.length < 2) { setSuggestions([]); return; }
+    if (query.length < 1) { setSuggestions([]); return; }
     debounceRef.current = setTimeout(async () => {
       const res = await fetch(`/api/sku-search?q=${encodeURIComponent(query)}`);
       if (res.ok) setSuggestions(await res.json());

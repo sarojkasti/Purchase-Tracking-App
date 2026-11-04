@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
   SkuAutocomplete,
@@ -263,8 +263,12 @@ export default function PODetailClient({
   agents: { id: string; name: string }[];
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [po, setPo] = useState(initialPo);
-  const [tab, setTab] = useState<"overview" | "items" | "payments" | "ledger" | "shipping" | "history" | "attachments" | "notes">("overview");
+  const validTabs = ["overview", "items", "payments", "ledger", "shipping", "history", "attachments", "notes"] as const;
+  type TabType = typeof validTabs[number];
+  const initialTab = (validTabs as readonly string[]).includes(searchParams.get("tab") ?? "") ? searchParams.get("tab") as TabType : "overview";
+  const [tab, setTab] = useState<TabType>(initialTab);
   const [saving, setSaving] = useState(false);
 
   async function refresh() {
@@ -4293,7 +4297,7 @@ function AttachmentsTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<vo
               <tr key={a.id} className="border-t">
                 <td className="px-3 py-2">{attachmentTypeLabels[a.type]}</td>
                 <td className="px-3 py-2">
-                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                  <a href={a.url.startsWith("http") ? a.url : `/api/file-view?path=${encodeURIComponent(a.url)}`} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                     {a.fileName}
                   </a>
                 </td>
