@@ -5,6 +5,7 @@ import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 export const authConfig: NextAuthConfig = {
   pages: { signIn: "/login" },
   session: { strategy: "jwt" },
+  trustHost: true,
   providers: [
     MicrosoftEntraID({
       clientId: process.env.MICROSOFT_CLIENT_ID ?? "",
