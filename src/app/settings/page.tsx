@@ -13,6 +13,10 @@ export default function SettingsPage() {
           <div className="font-medium">Roles & Permissions</div>
           <div className="text-sm text-gray-500 mt-1">Create roles and configure access rights.</div>
         </Link>
+        <Link href="/settings/audit-logs" className="block bg-white border rounded p-4 hover:border-gray-400">
+          <div className="font-medium">Audit Logs & Online Users</div>
+          <div className="text-sm text-gray-500 mt-1">View user activity, login history, and who is currently online.</div>
+        </Link>
       </div>
     </div>
   );

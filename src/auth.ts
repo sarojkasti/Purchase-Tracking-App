@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/auth.config";
+import { logAudit } from "@/lib/audit";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
@@ -29,6 +30,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }),
   ],
+  events: {
+    async signIn({ user }) {
+      await logAudit({
+        userId: user.id,
+        userEmail: user.email ?? undefined,
+        action: "LOGIN",
+        detail: "User signed in",
+      });
+    },
+    async signOut({ token }) {
+      await logAudit({
+        userId: token?.sub,
+        userEmail: token?.email ?? undefined,
+        action: "LOGOUT",
+        detail: "User signed out",
+      });
+    },
+  },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {

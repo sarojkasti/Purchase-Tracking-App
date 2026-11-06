@@ -579,6 +579,7 @@ model User {
   roleId        String?
   role          Role?     @relation(fields: [roleId], references: [id])
   active        Boolean   @default(true)
+  lastSeenAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -619,4 +620,20 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  userEmail String?
+  action    String   // e.g. "CREATE", "UPDATE", "DELETE", "LOGIN", "LOGOUT"
+  entity    String?  // e.g. "PurchaseOrder", "Vendor"
+  entityId  String?
+  detail    String?  // human-readable summary
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
 }
