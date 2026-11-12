@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { adToBs, bsWeekLabel } from "@/lib/bsDate";
 import { recalcPoTotals, recalcOrderStatus } from "@/lib/poTotals";
+import { auth } from "@/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(
   _req: NextRequest,
@@ -35,6 +37,7 @@ export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
   const { id } = await params;
   const body = await req.json();
 
@@ -217,6 +220,16 @@ export async function PUT(
     await recalcOrderStatus(id);
     po = (await prisma.purchaseOrder.findUnique({ where: { id } })) ?? po;
   }
+  // Build a human-readable summary of what changed
+  const changed: string[] = [];
+  if (body.onHold === true) changed.push("put on hold");
+  else if (body.onHold === false) changed.push("removed from hold");
+  if (body.cancelled === true) changed.push("cancelled");
+  else if (body.cancelled === false) changed.push("uncancelled");
+  if (body.stage) changed.push(`stage → ${body.stage}`);
+  const detail = changed.length ? changed.join(", ") : "updated details";
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "UPDATE", entity: "PurchaseOrder", entityId: id, detail: `PO ${po.poNumber}: ${detail}` });
+
   return NextResponse.json(po);
 }
 
@@ -224,7 +237,10 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
   const { id } = await params;
+  const po = await prisma.purchaseOrder.findUnique({ where: { id }, select: { poNumber: true } });
   await prisma.purchaseOrder.delete({ where: { id } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "DELETE", entity: "PurchaseOrder", entityId: id, detail: `Deleted PO ${po?.poNumber ?? id}` });
   return NextResponse.json({ ok: true });
 }

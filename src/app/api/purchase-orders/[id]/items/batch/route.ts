@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { buildPOItemData } from "@/lib/poItemData";
 import { upsertProductFromItem } from "@/lib/productUpsert";
 import { recalcPoTotals } from "@/lib/poTotals";
+import { auth } from "@/auth";
+import { logAudit } from "@/lib/audit";
 
 async function detectOrderType(newmewSku: string | null, chineseSku: string | null, excludeItemId?: string): Promise<string> {
   if (!newmewSku && !chineseSku) return "New Order";
@@ -33,6 +35,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
   const { id: poId } = await params;
   const body: BatchBody = await req.json();
 
@@ -119,5 +122,14 @@ export async function POST(
     where: { id: poId },
     include: { items: true },
   });
+
+  const parts: string[] = [];
+  if ((body.creates ?? []).length) parts.push(`added ${body.creates!.length} item(s)`);
+  if ((body.updates ?? []).length) parts.push(`updated ${body.updates!.length} item(s)`);
+  if ((body.deletes ?? []).length) parts.push(`deleted ${body.deletes!.length} item(s)`);
+  if (parts.length) {
+    await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "UPDATE", entity: "Items", entityId: poId, detail: `PO ${updated?.poNumber}: ${parts.join(", ")}` });
+  }
+
   return NextResponse.json(updated);
 }

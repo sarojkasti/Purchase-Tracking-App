@@ -471,7 +471,7 @@ export default function NewPOForm({
                 <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
                 <th className="px-2 py-1.5 min-w-[7rem]">Gender</th>
-                <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
+                <th className="px-2 py-1.5 min-w-[10rem]">Colors</th>
                 <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
                 <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate <span className="text-red-600">*</span></th>

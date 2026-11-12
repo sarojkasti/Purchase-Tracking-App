@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { adToBs } from "@/lib/bsDate";
 import { upsertProductFromItem } from "@/lib/productUpsert";
 import { recalcPoTotals } from "@/lib/poTotals";
+import { auth } from "@/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -46,6 +48,7 @@ type NewItemInput = {
 };
 
 export async function POST(req: NextRequest) {
+  const session = await auth();
   const body = await req.json();
 
   if (!body.piNumber || !String(body.piNumber).trim()) {
@@ -169,5 +172,6 @@ export async function POST(req: NextRequest) {
 
   await recalcPoTotals(po.id);
   const updated = await prisma.purchaseOrder.findUnique({ where: { id: po.id }, include: { items: true } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "CREATE", entity: "PurchaseOrder", entityId: po.id, detail: `Created PO ${po.poNumber}` });
   return NextResponse.json(updated, { status: 201 });
 }

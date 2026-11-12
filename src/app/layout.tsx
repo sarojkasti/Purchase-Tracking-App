@@ -5,6 +5,7 @@ import DisableNumberWheel from "@/components/DisableNumberWheel";
 import NavUser from "@/components/NavUser";
 import SessionProviderWrapper from "@/components/SessionProviderWrapper";
 import { OnlinePing } from "@/components/OnlinePing";
+import IdleLogout from "@/components/IdleLogout";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -67,6 +68,7 @@ export default function RootLayout({
           </main>
           <DisableNumberWheel />
           <OnlinePing />
+          <IdleLogout />
         </SessionProviderWrapper>
       </body>
     </html>

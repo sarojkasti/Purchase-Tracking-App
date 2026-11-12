@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { syncPaymentRollups, poTotalAmountRMB } from "@/lib/poTotals";
+import { auth } from "@/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
   const { id: poId } = await params;
   const body = await req.json();
 
@@ -53,6 +56,8 @@ export async function POST(
   });
 
   await syncPaymentRollups(poId);
+  const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "CREATE", entity: "Payment", entityId: poId, detail: `PO ${po?.poNumber}: added ${payment.paymentType} payment ¥${payment.amountRMB}` });
 
   return NextResponse.json(payment, { status: 201 });
 }

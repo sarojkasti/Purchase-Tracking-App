@@ -1422,7 +1422,7 @@ function ItemsTab({
               <th className="px-2 py-1.5 min-w-[7rem]">Lens <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[8rem]">Category</th>
               <th className="px-2 py-1.5 min-w-[7rem]">Gender</th>
-              <th className="px-2 py-1.5 min-w-[10rem]">Colors <span className="text-red-600">*</span></th>
+              <th className="px-2 py-1.5 min-w-[10rem]">Colors</th>
               <th className="px-2 py-1.5 min-w-[13rem]">Size (L-B-T) <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[6rem]">Units <span className="text-red-600">*</span></th>
               <th className="px-2 py-1.5 min-w-[7rem]">RMB Rate <span className="text-red-600">*</span></th>
@@ -2088,6 +2088,9 @@ function LedgerTab({ po }: { po: PO }) {
 
   const advanceRawRMB = r2(sortedPayments.filter((p) => p.paymentType === "ADVANCE").reduce((s, p) => s + p.amountRMB, 0));
   const advanceCarryRMB = po.estAdvanceRMB > 0 ? r2(Math.max(advanceRawRMB - po.estAdvanceRMB, 0)) : 0;
+  const effectivePaidAdvanceRMB = r2(advanceRawRMB - advanceCarryRMB);
+  const balanceRawRMB = r2(sortedPayments.filter((p) => p.paymentType === "BALANCE").reduce((s, p) => s + p.amountRMB, 0));
+  const effectivePaidBalanceRMB = r2(balanceRawRMB + advanceCarryRMB);
 
   const advanceDueRMB = r2(Math.max(po.estAdvanceRMB - effectivePaidAdvanceRMB, 0));
   const advanceDueNPR = r2(Math.max(po.estAdvanceNPR - po.paidAdvanceNPR, 0));
@@ -3241,10 +3244,27 @@ function varianceLabel(actual: string | null, estimate: string | null) {
 // stage (see STAGE_ESTIMATE_FIELD in poStages.ts) - most manual stages have
 // no such field yet and show the actual date alone. This is the full
 // history: one row per StageEvent, oldest first.
+type ActivityLog = {
+  id: string;
+  userEmail: string | null;
+  action: string;
+  detail: string | null;
+  createdAt: string;
+};
+
 function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDate, setEditDate] = useState("");
   const [saving, setSaving] = useState(false);
+  const [activity, setActivity] = useState<ActivityLog[]>([]);
+  const [activityLoading, setActivityLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/purchase-orders/${po.id}/activity`)
+      .then((r) => r.json())
+      .then((d) => { setActivity(Array.isArray(d) ? d : []); setActivityLoading(false); })
+      .catch(() => setActivityLoading(false));
+  }, [po.id]);
 
   const mfgType = po.items[0]?.mfgType ?? null;
   const stages = stagesFor(mfgType);
@@ -3411,6 +3431,49 @@ function HistoryTab({ po, onRefresh }: { po: PO; onRefresh: () => Promise<void> 
       </div>
 
       {po.dateRevisions.length > 0 && <DateRevisionsPanel revisions={po.dateRevisions} />}
+
+      {/* User activity log */}
+      <div>
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">User Activity</h3>
+        <div className="bg-white rounded border overflow-hidden">
+          {activityLoading ? (
+            <p className="px-4 py-6 text-sm text-gray-400">Loading…</p>
+          ) : activity.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-gray-400">No activity recorded yet.</p>
+          ) : (
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-100 text-left text-gray-600 text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Date & Time</th>
+                  <th className="px-4 py-2 font-medium">User</th>
+                  <th className="px-4 py-2 font-medium">Action</th>
+                  <th className="px-4 py-2 font-medium">Detail</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {activity.map((log) => (
+                  <tr key={log.id}>
+                    <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-700">{log.userEmail ?? "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                        log.action === "CREATE" ? "bg-green-100 text-green-700" :
+                        log.action === "DELETE" ? "bg-red-100 text-red-700" :
+                        "bg-blue-100 text-blue-700"
+                      }`}>
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-gray-600">{log.detail ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -3,12 +3,6 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
-import { uploadToOneDrive, isOneDriveConfigured } from "@/lib/onedrive";
-
-const EXCEL_TYPES = new Set([
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-]);
 
 const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -59,20 +53,11 @@ export async function POST(
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  let fileUrl: string;
-
-  if (EXCEL_TYPES.has(file.type) && isOneDriveConfigured()) {
-    // Upload Excel files to OneDrive and get a shareable link
-    const uniqueName = `${crypto.randomUUID()}-${file.name}`;
-    fileUrl = await uploadToOneDrive(buffer, uniqueName, file.type);
-  } else {
-    // Store locally for PDFs and images
-    const dir = path.join(process.cwd(), "public", "uploads", "po-attachments");
-    await mkdir(dir, { recursive: true });
-    const filename = `${crypto.randomUUID()}.${ext}`;
-    await writeFile(path.join(dir, filename), buffer);
-    fileUrl = `/uploads/po-attachments/${filename}`;
-  }
+  const dir = path.join(process.cwd(), "public", "uploads", "po-attachments");
+  await mkdir(dir, { recursive: true });
+  const filename = `${crypto.randomUUID()}.${ext}`;
+  await writeFile(path.join(dir, filename), buffer);
+  const fileUrl = `/uploads/po-attachments/${filename}`;
 
   const attachment = await prisma.pOAttachment.create({
     data: {

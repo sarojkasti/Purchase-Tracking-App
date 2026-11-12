@@ -41,8 +41,7 @@ export function missingItemFields(row: ItemFields): Set<ItemFieldKey> {
   if (!row.front) missing.add("front");
   if (!row.temple) missing.add("temple");
   if (!row.lens) missing.add("lens");
-  if (row.colors.length === 0) missing.add("colors");
-  if (!row.sizeLens || !row.sizeBridge || !row.sizeTemple) missing.add("size");
+if (!row.sizeLens || !row.sizeBridge || !row.sizeTemple) missing.add("size");
   if ((parseFloat(row.unitsOrdered) || 0) <= 0) missing.add("units");
   if (pricingAmount(row) <= 0) missing.add("price");
   return missing;

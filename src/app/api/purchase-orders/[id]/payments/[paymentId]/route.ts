@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { syncPaymentRollups, poTotalAmountRMB } from "@/lib/poTotals";
+import { auth } from "@/auth";
+import { logAudit } from "@/lib/audit";
 
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; paymentId: string }> }
 ) {
+  const session = await auth();
   const { id: poId, paymentId } = await params;
   const body = await req.json();
 
@@ -49,6 +52,8 @@ export async function PUT(
   });
 
   await syncPaymentRollups(poId);
+  const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "UPDATE", entity: "Payment", entityId: poId, detail: `PO ${po?.poNumber}: updated ${payment.paymentType} payment ¥${payment.amountRMB}` });
 
   return NextResponse.json(payment);
 }
@@ -57,10 +62,13 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string; paymentId: string }> }
 ) {
+  const session = await auth();
   const { id: poId, paymentId } = await params;
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId }, select: { paymentType: true, amountRMB: true } });
   await prisma.payment.delete({ where: { id: paymentId } });
-
   await syncPaymentRollups(poId);
+  const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "DELETE", entity: "Payment", entityId: poId, detail: `PO ${po?.poNumber}: deleted ${payment?.paymentType} payment ¥${payment?.amountRMB}` });
 
   return NextResponse.json({ ok: true });
 }
