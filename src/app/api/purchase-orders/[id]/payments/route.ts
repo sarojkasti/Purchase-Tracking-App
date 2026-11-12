@@ -56,8 +56,8 @@ export async function POST(
   });
 
   await syncPaymentRollups(poId);
-  const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
-  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "CREATE", entity: "Payment", entityId: poId, detail: `PO ${po?.poNumber}: added ${payment.paymentType} payment ¥${payment.amountRMB}` });
+  const poRef = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
+  await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "CREATE", entity: "Payment", entityId: poId, detail: `PO ${poRef?.poNumber}: added ${payment.paymentType} payment ¥${payment.amountRMB}` });
 
   return NextResponse.json(payment, { status: 201 });
 }
