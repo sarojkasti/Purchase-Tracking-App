@@ -16,18 +16,23 @@ export async function GET() {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const rows = await prisma.appSetting.findMany({ where: { key: { in: [...KEYS] } } });
-  const config: Record<string, string> = {};
-  for (const key of KEYS) {
-    const row = rows.find((r) => r.key === key);
-    // Never expose the secret value — return a placeholder if already set
-    if (key === "mail_client_secret") {
-      config[key] = row?.value ? "••••••••" : "";
-    } else {
-      config[key] = row?.value ?? "";
+  try {
+    const rows = await prisma.appSetting.findMany({ where: { key: { in: [...KEYS] } } });
+    const config: Record<string, string> = {};
+    for (const key of KEYS) {
+      const row = rows.find((r) => r.key === key);
+      // Never expose the secret value — return a placeholder if already set
+      if (key === "mail_client_secret") {
+        config[key] = row?.value ? "••••••••" : "";
+      } else {
+        config[key] = row?.value ?? "";
+      }
     }
+    return NextResponse.json(config);
+  } catch (err) {
+    console.error("email-config GET error:", err);
+    return NextResponse.json({ error: "Failed to load settings." }, { status: 500 });
   }
-  return NextResponse.json(config);
 }
 
 export async function POST(req: NextRequest) {
@@ -35,17 +40,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
+  let body: Record<string, string>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-  for (const key of KEYS) {
-    const val: string = body[key] ?? "";
-    // If the secret placeholder is sent unchanged, skip it
-    if (key === "mail_client_secret" && val === "••••••••") continue;
-    await prisma.appSetting.upsert({
-      where: { key },
-      create: { key, value: val },
-      update: { value: val },
-    });
+  try {
+    for (const key of KEYS) {
+      const val: string = body[key] ?? "";
+      // If the secret placeholder is sent unchanged, skip it
+      if (key === "mail_client_secret" && val === "••••••••") continue;
+      await prisma.appSetting.upsert({
+        where: { key },
+        create: { key, value: val },
+        update: { value: val },
+      });
+    }
+  } catch (err) {
+    console.error("email-config POST error:", err);
+    return NextResponse.json({ error: "Failed to save settings." }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

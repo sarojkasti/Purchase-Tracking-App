@@ -72,12 +72,7 @@ export default function LoginForm() {
           />
         </div>
         <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-gray-500">Password</label>
-            <Link href="/forgot-password" className="text-xs text-gray-400 hover:text-gray-700">
-              Forgot password?
-            </Link>
-          </div>
+          <label className="block text-xs text-gray-500 mb-1">Password</label>
           <input
             type="password"
             required
@@ -94,6 +89,12 @@ export default function LoginForm() {
         >
           {loading ? "Signing in…" : "Sign in"}
         </button>
+        <Link
+          href="/forgot-password"
+          className="block text-center text-xs text-gray-400 hover:text-gray-700"
+        >
+          Forgot password?
+        </Link>
       </form>
     </div>
   );

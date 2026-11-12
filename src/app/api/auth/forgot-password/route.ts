@@ -14,7 +14,8 @@ export async function POST(req: NextRequest) {
   const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
 
   // Always return success to avoid user enumeration
-  if (!user || !user.active || !user.password) {
+  // Allow inactive users with no password (pending activation) to get a new link
+  if (!user) {
     return NextResponse.json({ ok: true });
   }
 

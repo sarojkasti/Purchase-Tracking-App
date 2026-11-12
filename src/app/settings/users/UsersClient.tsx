@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type Role = { id: string; name: string };
-type User = { id: string; name: string | null; email: string; active: boolean; roleId: string | null; role: { name: string } | null; createdAt: string };
+type User = { id: string; name: string | null; email: string; active: boolean; roleId: string | null; role: { name: string } | null; createdAt: string; hasPassword?: boolean };
 
 const emptyForm = () => ({ name: "", email: "", password: "", roleId: "", active: true });
 
@@ -14,6 +14,8 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
   const [form, setForm] = useState(emptyForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [activationSent, setActivationSent] = useState<string | null>(null);
 
   async function load() {
     const res = await fetch("/api/users");
@@ -36,19 +38,40 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
     setError(null);
   }
 
-  function cancel() { setCreating(false); setEditing(null); setError(null); }
+  function cancel() { setCreating(false); setEditing(null); setError(null); setEmailError(null); setActivationSent(null); }
 
   async function save() {
     if (!form.email.trim()) { setError("Email is required."); return; }
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); setEmailError(null); setActivationSent(null);
     const method = editing ? "PUT" : "POST";
     const url = editing ? `/api/users/${editing.id}` : "/api/users";
     const body: Record<string, unknown> = { name: form.name || null, email: form.email, roleId: form.roleId || null, active: form.active };
-    if (form.password) body.password = form.password;
+    if (editing && form.password) body.password = form.password;
     const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     setSaving(false);
     if (!res.ok) { const d = await res.json(); setError(d.error || "Save failed"); return; }
+    const d = await res.json();
+    if (!editing) {
+      load();
+      setCreating(false);
+      setEditing(null);
+      if (d.emailError) {
+        setEmailError(d.emailError);
+      } else {
+        setActivationSent(form.email);
+      }
+      return;
+    }
     cancel(); load();
+  }
+
+  async function resendActivation(user: User) {
+    const res = await fetch("/api/auth/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: user.email }),
+    });
+    if (res.ok) setActivationSent(user.email);
   }
 
   async function toggleActive(user: User) {
@@ -72,6 +95,9 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
       {isOpen && (
         <div className="bg-white border rounded p-4 space-y-3 max-w-md">
           <h2 className="font-medium text-sm">{editing ? "Edit User" : "New User"}</h2>
+          {!editing && (
+            <p className="text-xs text-gray-400">An activation email will be sent to the user so they can set their own password.</p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Name</label>
@@ -83,11 +109,13 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
               <input type="email" className="border rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-gray-400"
                 value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="user@newmew.com" />
             </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">{editing ? "New Password (leave blank to keep)" : "Password"}</label>
-              <input type="password" className="border rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-gray-400"
-                value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="••••••••" />
-            </div>
+            {editing && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">New Password (leave blank to keep)</label>
+                <input type="password" className="border rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-gray-400"
+                  value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="••••••••" />
+              </div>
+            )}
             <div>
               <label className="block text-xs text-gray-500 mb-1">Role</label>
               <select className="border rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-gray-400"
@@ -111,6 +139,17 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
             <button onClick={cancel} className="text-sm px-4 py-1.5 rounded border hover:bg-gray-50">Cancel</button>
           </div>
         </div>
+      )}
+
+      {activationSent && (
+        <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded px-3 py-2">
+          User created. Activation email sent to <strong>{activationSent}</strong>.
+        </p>
+      )}
+      {emailError && (
+        <p className="text-sm text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-3 py-2">
+          {emailError}
+        </p>
       )}
 
       <div className="bg-white border rounded overflow-hidden">
@@ -141,6 +180,11 @@ export default function UsersClient({ roles }: { roles: Role[] }) {
                     <button onClick={() => toggleActive(user)} className="text-xs text-gray-500 hover:underline">
                       {user.active ? "Deactivate" : "Activate"}
                     </button>
+                    {!user.active && user.hasPassword === false && (
+                      <button onClick={() => resendActivation(user)} className="text-xs text-orange-600 hover:underline">
+                        Resend activation
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>

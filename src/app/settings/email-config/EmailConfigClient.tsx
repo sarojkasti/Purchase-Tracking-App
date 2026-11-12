@@ -23,6 +23,10 @@ export default function EmailConfigClient() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"idle" | "saved" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [testTo, setTestTo] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [testStatus, setTestStatus] = useState<"idle" | "sent" | "error">("idle");
+  const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/settings/email-config")
@@ -34,6 +38,28 @@ export default function EmailConfigClient() {
   function set(key: keyof Config, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
     setStatus("idle");
+  }
+
+  async function handleTest(e: React.FormEvent) {
+    e.preventDefault();
+    setTesting(true);
+    setTestError(null);
+    setTestStatus("idle");
+    try {
+      const res = await fetch("/api/settings/email-config/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: testTo }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? "Send failed.");
+      setTestStatus("sent");
+    } catch (err: unknown) {
+      setTestError(err instanceof Error ? err.message : "Send failed.");
+      setTestStatus("error");
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -73,6 +99,7 @@ export default function EmailConfigClient() {
       {loading ? (
         <p className="text-sm text-gray-400">Loading…</p>
       ) : (
+        <>
         <form onSubmit={handleSubmit} className="bg-white border rounded-lg p-6 space-y-4">
           <Field
             label="Tenant ID"
@@ -114,6 +141,31 @@ export default function EmailConfigClient() {
             {saving ? "Saving…" : "Save"}
           </button>
         </form>
+
+        <form onSubmit={handleTest} className="bg-white border rounded-lg p-6 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-700">Send Test Email</h2>
+          <p className="text-xs text-gray-400">Sends a test email using the saved credentials above.</p>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              required
+              placeholder="Recipient email"
+              value={testTo}
+              onChange={(e) => { setTestTo(e.target.value); setTestStatus("idle"); }}
+              className="flex-1 border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-gray-400"
+            />
+            <button
+              type="submit"
+              disabled={testing}
+              className="bg-blue-600 text-white rounded px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              {testing ? "Sending…" : "Send"}
+            </button>
+          </div>
+          {testStatus === "sent" && <p className="text-green-700 text-sm">Test email sent successfully.</p>}
+          {testError && <p className="text-red-600 text-sm">{testError}</p>}
+        </form>
+        </>
       )}
     </div>
   );
