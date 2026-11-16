@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncPaymentRollups, poTotalAmountRMB } from "@/lib/poTotals";
+import { syncPaymentRollups, recalcPoTotals, recalcRelatedPoTotals, poTotalAmountRMB } from "@/lib/poTotals";
 import { auth } from "@/auth";
 import { logAudit } from "@/lib/audit";
 
@@ -56,6 +56,8 @@ export async function POST(
   });
 
   await syncPaymentRollups(poId);
+  await recalcPoTotals(poId);
+  recalcRelatedPoTotals(poId); // fire-and-forget: updates other POs sharing the same agent
   const poRef = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
   await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "CREATE", entity: "Payment", entityId: poId, detail: `PO ${poRef?.poNumber}: added ${payment.paymentType} payment ¥${payment.amountRMB}` });
 

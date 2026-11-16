@@ -8,10 +8,12 @@ export const PERMISSIONS = [
   { key: "pos_create",   label: "POs – Create" },
   { key: "pos_edit",     label: "POs – Edit" },
   { key: "pos_delete",   label: "POs – Delete" },
-  { key: "reports",      label: "Reports" },
-  { key: "vendors",      label: "Vendors" },
-  { key: "masters",      label: "Masters" },
-  { key: "settings",     label: "Settings (Admin)" },
+  { key: "reports",           label: "Reports" },
+  { key: "snapshots_view",    label: "Snapshots – View" },
+  { key: "snapshots_manage",  label: "Snapshots – Manage" },
+  { key: "vendors",           label: "Vendors" },
+  { key: "masters",           label: "Masters" },
+  { key: "settings",          label: "Settings (Admin)" },
 ];
 
 type Role = {

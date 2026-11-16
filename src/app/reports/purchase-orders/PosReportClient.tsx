@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
+import SnapshotModal from "@/components/SnapshotModal";
 
 type PoRow = {
   id: string;
@@ -300,17 +301,19 @@ function ColumnHeader({
 }
 
 export default function PosReportClient() {
+  const [liveRows, setLiveRows] = useState<PoRow[]>([]);
   const [rows, setRows] = useState<PoRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<keyof PoRow | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [colFilters, setColFilters] = useState<Map<keyof PoRow, Set<string> | null>>(new Map());
+  const [activeSnapshotLabel, setActiveSnapshotLabel] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/reports/purchase-orders")
       .then((res) => res.json())
-      .then((data) => setRows(data))
+      .then((data) => { setLiveRows(data); setRows(data); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -368,6 +371,11 @@ export default function PosReportClient() {
 
   return (
     <div className="space-y-3">
+      {activeSnapshotLabel && (
+        <div className="bg-amber-50 border border-amber-200 rounded px-4 py-2 text-sm text-amber-800">
+          Viewing snapshot: <strong>{activeSnapshotLabel}</strong> — this is historical data, not live.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <input
@@ -387,6 +395,13 @@ export default function PosReportClient() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500">{processed.length} rows</span>
+          <SnapshotModal
+            reportType="MASTER"
+            currentData={liveRows}
+            activeSnapshotLabel={activeSnapshotLabel}
+            onLoadSnapshot={(data, label) => { setRows(data as PoRow[]); setActiveSnapshotLabel(label); setColFilters(new Map()); }}
+            onClearSnapshot={() => { setRows(liveRows); setActiveSnapshotLabel(null); setColFilters(new Map()); }}
+          />
           <button
             onClick={handleExport}
             disabled={processed.length === 0}

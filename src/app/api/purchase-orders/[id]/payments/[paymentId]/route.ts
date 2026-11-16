@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncPaymentRollups, poTotalAmountRMB } from "@/lib/poTotals";
+import { syncPaymentRollups, recalcPoTotals, recalcRelatedPoTotals, poTotalAmountRMB } from "@/lib/poTotals";
 import { auth } from "@/auth";
 import { logAudit } from "@/lib/audit";
 
@@ -52,6 +52,8 @@ export async function PUT(
   });
 
   await syncPaymentRollups(poId);
+  await recalcPoTotals(poId);
+  recalcRelatedPoTotals(poId);
   const poRef = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
   await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "UPDATE", entity: "Payment", entityId: poId, detail: `PO ${poRef?.poNumber}: updated ${payment.paymentType} payment ¥${payment.amountRMB}` });
 
@@ -67,6 +69,8 @@ export async function DELETE(
   const payment = await prisma.payment.findUnique({ where: { id: paymentId }, select: { paymentType: true, amountRMB: true } });
   await prisma.payment.delete({ where: { id: paymentId } });
   await syncPaymentRollups(poId);
+  await recalcPoTotals(poId);
+  recalcRelatedPoTotals(poId);
   const po = await prisma.purchaseOrder.findUnique({ where: { id: poId }, select: { poNumber: true } });
   await logAudit({ userId: session?.user?.id, userEmail: session?.user?.email ?? undefined, action: "DELETE", entity: "Payment", entityId: poId, detail: `PO ${po?.poNumber}: deleted ${payment?.paymentType} payment ¥${payment?.amountRMB}` });
 

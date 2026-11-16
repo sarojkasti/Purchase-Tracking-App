@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getApplicablePaymentPolicy } from "@/lib/vendorPolicy";
+import { getApplicableForexRate } from "@/lib/forexRate";
 import { nextManualStage, previousStage, type Stage } from "@/lib/poStages";
 import { adToBs } from "@/lib/bsDate";
 
@@ -292,13 +293,36 @@ export async function recalcPoTotals(poId: string) {
   const unitsShipped = items.reduce((s, i) => s + i.shippedQty, 0);
   const unitsReceived = items.reduce((s, i) => s + i.receivedQty, 0);
   const piAmountRMB = items.reduce((s, i) => s + (i.amountRMB ?? 0), 0);
-  const piAmountNPR = items.reduce((s, i) => s + (i.amountNPR ?? 0), 0);
 
   const po = await prisma.purchaseOrder.findUnique({ where: { id: poId } });
   if (!po) return;
 
+  const agentId = po.agentId ?? null;
+
+  // Fetch date-specific forex rates in parallel
+  const [orderRate, advanceRate, balanceRate] = await Promise.all([
+    getApplicableForexRate(agentId, po.orderDateAD),
+    po.estAdvanceDate ? getApplicableForexRate(agentId, po.estAdvanceDate) : Promise.resolve(null),
+    po.estBalanceDate ? getApplicableForexRate(agentId, po.estBalanceDate) : Promise.resolve(null),
+  ]);
+
+  // Update item convRate and amountNPR using the order-date rate when available
+  if (orderRate) {
+    await Promise.all(
+      items
+        .filter((i) => i.amountRMB != null)
+        .map((i) =>
+          prisma.pOItem.update({
+            where: { id: i.id },
+            data: { convRate: orderRate, amountNPR: round2((i.amountRMB ?? 0) * orderRate) },
+          })
+        )
+    );
+  }
+
+  const piAmountNPR = orderRate ? round2(piAmountRMB * orderRate) : items.reduce((s, i) => s + (i.amountNPR ?? 0), 0);
+
   const extraCostsRMB = po.printingCostRMB + po.chinaFreightCostRMB + po.inspectionCostRMB;
-  const convRate = piAmountRMB ? piAmountNPR / piAmountRMB : 0;
   const poAmountRMB = piAmountRMB + extraCostsRMB;
 
   const policy = await getApplicablePaymentPolicy(po.vendorId, po.orderDateAD);
@@ -311,9 +335,9 @@ export async function recalcPoTotals(poId: string) {
           const estBalanceRMB = round2(poAmountRMB * policy.balancePercent);
           return {
             estAdvanceRMB,
-            estAdvanceNPR: round2(estAdvanceRMB * convRate),
+            estAdvanceNPR: advanceRate ? round2(estAdvanceRMB * advanceRate) : (orderRate ? round2(estAdvanceRMB * orderRate) : 0),
             estBalanceRMB,
-            estBalanceNPR: round2(estBalanceRMB * convRate),
+            estBalanceNPR: balanceRate ? round2(estBalanceRMB * balanceRate) : (orderRate ? round2(estBalanceRMB * orderRate) : 0),
           };
         })()
       : {};
@@ -562,4 +586,19 @@ export async function syncPaymentRollups(poId: string) {
   });
 
   await recalcOrderStatus(poId);
+}
+
+// When a payment is added/updated/deleted, the forex rate pool changes for all
+// POs that share the same agent. Recalculate their NPR estimates in the background.
+// When a payment is added/updated/deleted, the forex rate pool changes globally.
+// Recalculate NPR estimates for all other POs.
+export async function recalcRelatedPoTotals(changedPoId: string) {
+  const allPos = await prisma.purchaseOrder.findMany({
+    where: { id: { not: changedPoId } },
+    select: { id: true },
+  });
+
+  for (const po of allPos) {
+    await recalcPoTotals(po.id);
+  }
 }

@@ -4,6 +4,29 @@ import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
 import { useState } from "react";
 
+const navLinks = [
+  { href: "/", label: "Dashboard" },
+  { href: "/purchase-orders", label: "Purchase Orders" },
+  { href: "/vendors", label: "Vendors" },
+  { href: "/masters", label: "Masters" },
+  { href: "/reports", label: "Reports" },
+  { href: "/mrp-calculator", label: "MRP Calculator" },
+];
+
+export function NavLinks() {
+  const { data: session } = useSession();
+  if (!session) return null;
+  return (
+    <>
+      {navLinks.map((l) => (
+        <Link key={l.href} href={l.href} className="text-sm text-gray-600 hover:text-gray-900">
+          {l.label}
+        </Link>
+      ))}
+    </>
+  );
+}
+
 export default function NavUser() {
   const { data: session } = useSession();
   const [open, setOpen] = useState(false);

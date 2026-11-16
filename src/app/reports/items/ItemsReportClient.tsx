@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
+import SnapshotModal from "@/components/SnapshotModal";
 
 type ItemRow = {
   poNumber: string;
@@ -256,17 +257,19 @@ function ColumnHeader({
 }
 
 export default function ItemsReportClient() {
+  const [liveRows, setLiveRows] = useState<ItemRow[]>([]);
   const [rows, setRows] = useState<ItemRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<keyof ItemRow | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [colFilters, setColFilters] = useState<Map<keyof ItemRow, Set<string> | null>>(new Map());
+  const [activeSnapshotLabel, setActiveSnapshotLabel] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/reports/items")
       .then((res) => res.json())
-      .then((data) => setRows(data))
+      .then((data) => { setLiveRows(data); setRows(data); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -317,6 +320,11 @@ export default function ItemsReportClient() {
 
   return (
     <div className="space-y-3">
+      {activeSnapshotLabel && (
+        <div className="bg-amber-50 border border-amber-200 rounded px-4 py-2 text-sm text-amber-800">
+          Viewing snapshot: <strong>{activeSnapshotLabel}</strong> — this is historical data, not live.
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <input
@@ -333,6 +341,13 @@ export default function ItemsReportClient() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-500">{processed.length} rows</span>
+          <SnapshotModal
+            reportType="ITEMS"
+            currentData={liveRows}
+            activeSnapshotLabel={activeSnapshotLabel}
+            onLoadSnapshot={(data, label) => { setRows(data as ItemRow[]); setActiveSnapshotLabel(label); setColFilters(new Map()); }}
+            onClearSnapshot={() => { setRows(liveRows); setActiveSnapshotLabel(null); setColFilters(new Map()); }}
+          />
           <button onClick={handleExport} disabled={processed.length === 0} className="rounded bg-gray-900 text-white text-sm px-3 py-1.5 hover:bg-gray-700 disabled:opacity-50">
             Export to Excel
           </button>

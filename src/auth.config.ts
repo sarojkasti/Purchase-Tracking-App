@@ -4,7 +4,7 @@ import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 // Lightweight config used by middleware (Edge-compatible, no Prisma/Node imports)
 export const authConfig: NextAuthConfig = {
   pages: { signIn: "/login" },
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt", maxAge: 30 * 60, updateAge: 60 },
   trustHost: true,
   providers: [
     MicrosoftEntraID({

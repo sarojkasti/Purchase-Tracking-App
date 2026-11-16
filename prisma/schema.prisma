@@ -639,6 +639,17 @@ model PasswordResetToken {
   @@index([email])
 }
 
+model ReportSnapshot {
+  id        String   @id @default(cuid())
+  type      String   // "MASTER" | "ITEMS"
+  label     String
+  data      Json
+  createdAt DateTime @default(now())
+  createdBy String?  // userId, null = auto (cron)
+
+  @@index([type, createdAt])
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String?

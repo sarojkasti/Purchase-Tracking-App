@@ -24,6 +24,15 @@ export default function ReportsIndexPage() {
           </div>
         </Link>
         <Link
+          href="/reports/payments"
+          className="block bg-white border rounded p-4 hover:border-gray-400"
+        >
+          <div className="font-medium">Payment Report</div>
+          <div className="text-sm text-gray-500 mt-1">
+            All payments across all POs in chronological order — RMB, exchange rate, NPR, evidence.
+          </div>
+        </Link>
+        <Link
           href="/reports/sku-history"
           className="block bg-white border rounded p-4 hover:border-gray-400"
         >

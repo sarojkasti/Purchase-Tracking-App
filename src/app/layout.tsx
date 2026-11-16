@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Link from "next/link";
 import DisableNumberWheel from "@/components/DisableNumberWheel";
-import NavUser from "@/components/NavUser";
+import NavUser, { NavLinks } from "@/components/NavUser";
 import SessionProviderWrapper from "@/components/SessionProviderWrapper";
 import { OnlinePing } from "@/components/OnlinePing";
 import IdleLogout from "@/components/IdleLogout";
@@ -23,15 +22,6 @@ export const metadata: Metadata = {
   description: "China sourcing purchase order tracker",
 };
 
-const navLinks = [
-  { href: "/", label: "Dashboard" },
-  { href: "/purchase-orders", label: "Purchase Orders" },
-  { href: "/vendors", label: "Vendors" },
-  { href: "/masters", label: "Masters" },
-  { href: "/reports", label: "Reports" },
-  { href: "/mrp-calculator", label: "MRP Calculator" },
-];
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -49,15 +39,7 @@ export default function RootLayout({
               <div className="flex h-14 items-center gap-6">
                 <span className="font-semibold text-lg">Purchase Tracker</span>
                 <nav className="flex gap-4 flex-1">
-                  {navLinks.map((l) => (
-                    <Link
-                      key={l.href}
-                      href={l.href}
-                      className="text-sm text-gray-600 hover:text-gray-900"
-                    >
-                      {l.label}
-                    </Link>
-                  ))}
+                  <NavLinks />
                 </nav>
                 <NavUser />
               </div>
